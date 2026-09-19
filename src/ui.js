@@ -9,6 +9,7 @@ export const SIMULATION_SPEEDS = [1, 2, 4];
 export let simulationSpeed = 1;
 export let orbitLinesVisible = true;
 export let isPaused = false;
+export let islLinkEnabled = true;
 export let satelliteMode = 'AUTOMATIC'; // 'AUTOMATIC' | 'MANUAL'
 
 // Mini 3D preview variables
@@ -23,7 +24,11 @@ let isPreviewInitialized = false;
  */
 export function initSatellitePreview(sourceSatelliteModel) {
   const previewCanvas = document.getElementById('satellite-preview-canvas');
-  if (!previewCanvas || isPreviewInitialized) return;
+  if (!previewCanvas || !sourceSatelliteModel) return;
+
+  previewScene = new THREE.Scene();
+  previewCamera = new THREE.PerspectiveCamera(38, 140 / 90, 0.1, 100);
+  previewCamera.position.set(0, 0, 8.5);
 
   previewRenderer = new THREE.WebGLRenderer({
     canvas: previewCanvas,
@@ -33,20 +38,22 @@ export function initSatellitePreview(sourceSatelliteModel) {
   previewRenderer.setSize(140, 90);
   previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-  previewScene = new THREE.Scene();
-  previewCamera = new THREE.PerspectiveCamera(40, 140 / 90, 0.1, 100);
-  previewCamera.position.set(0, 1.2, 4.0);
-  previewCamera.lookAt(0, 0, 0);
+  // Studio lighting for mini preview
+  const previewAmbient = new THREE.AmbientLight(0xffffff, 1.4);
+  previewScene.add(previewAmbient);
 
-  const previewSun = new THREE.DirectionalLight(0xffffff, 2.8);
-  previewSun.position.set(5, 5, 5);
-  previewScene.add(previewSun);
-  previewScene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  const previewDir = new THREE.DirectionalLight(0xffffff, 2.2);
+  previewDir.position.set(4, 5, 5);
+  previewScene.add(previewDir);
 
-  // Clone from the actual loaded satellite model
+  const previewFill = new THREE.DirectionalLight(0x38bdf8, 1.0);
+  previewFill.position.set(-4, -3, -3);
+  previewScene.add(previewFill);
+
+  // Clone preview model
   previewModel = sourceSatelliteModel.clone(true);
-  previewModel.scale.setScalar(0.7);
   previewModel.position.set(0, 0, 0);
+  previewModel.scale.set(0.9, 0.9, 0.9);
   previewScene.add(previewModel);
 
   isPreviewInitialized = true;
@@ -92,6 +99,8 @@ export function renderSatelliteStatusList(
     const pauseBtnText = isSatPaused ? 'RESUME' : 'PAUSE';
     const pauseBtnClass = isSatPaused ? 'paused' : '';
 
+    const isManual = sat.isManual !== undefined ? sat.isManual : (satelliteMode === 'MANUAL');
+
     card.innerHTML = `
       <div class="sat-card-header">
         <span class="sat-id-tag">${sat.id}</span>
@@ -109,7 +118,7 @@ export function renderSatelliteStatusList(
       </div>
       <div class="sat-actions-row">
         <button class="sat-action-btn pause-action ${pauseBtnClass}">${pauseBtnText}</button>
-        <button class="sat-action-btn remove-action">REMOVE</button>
+        ${isManual ? '<button class="sat-action-btn remove-action">REMOVE</button>' : ''}
       </div>
     `;
 
@@ -141,15 +150,17 @@ export function renderSatelliteStatusList(
       });
     }
 
-    // Remove button listener
-    const removeBtn = card.querySelector('.remove-action');
-    if (removeBtn) {
-      removeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (typeof onSatelliteRemove === 'function') {
-          onSatelliteRemove(sat);
-        }
-      });
+    // Remove button listener (manual mode only)
+    if (isManual) {
+      const removeBtn = card.querySelector('.remove-action');
+      if (removeBtn) {
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (typeof onSatelliteRemove === 'function') {
+            onSatelliteRemove(sat);
+          }
+        });
+      }
     }
 
     listContainer.appendChild(card);
@@ -162,6 +173,7 @@ export function renderSatelliteStatusList(
 export function setupUI({
   onSpeedChange,
   onToggleOrbitLines,
+  onToggleISLLink,
   onTogglePause,
   onModeChange,
   onDropSatellite,
@@ -211,7 +223,29 @@ export function setupUI({
     });
   }
 
-  // 3. Global Pause / Resume Toggle
+  // 3. ISL Link Toggle
+  const islToggleBtn = document.getElementById('isl-link-toggle');
+  if (islToggleBtn) {
+    islToggleBtn.addEventListener('click', () => {
+      islLinkEnabled = !islLinkEnabled;
+
+      if (islLinkEnabled) {
+        islToggleBtn.textContent = 'ON';
+        islToggleBtn.classList.remove('off');
+        islToggleBtn.classList.add('on');
+      } else {
+        islToggleBtn.textContent = 'OFF';
+        islToggleBtn.classList.remove('on');
+        islToggleBtn.classList.add('off');
+      }
+
+      if (typeof onToggleISLLink === 'function') {
+        onToggleISLLink(islLinkEnabled);
+      }
+    });
+  }
+
+  // 4. Global Pause / Resume Toggle
   const pauseToggleBtn = document.getElementById('pause-toggle');
   if (pauseToggleBtn) {
     pauseToggleBtn.addEventListener('click', () => {

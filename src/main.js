@@ -15,8 +15,19 @@ import {
   simulationSpeed,
   isPaused,
   orbitLinesVisible,
+  islLinkEnabled,
   satelliteMode
 } from './ui.js';
+import {
+  update as updateLinkLine,
+  setLinkLineVisible,
+  hasLineOfSight
+} from './tracking/linkLine.js';
+import {
+  initCommsConsole,
+  update as updateCommsConsole,
+  setCommsConsoleVisible
+} from './tracking/commsConsole.js';
 
 // ============================================================
 // CONFIGURATION CONSTANTS
@@ -157,6 +168,7 @@ async function main() {
         refreshStatusList();
       },
       onSatelliteRemove: (sat) => {
+        if (!sat.isManual) return;
         console.log(`Removing ${sat.id}`);
         scene.remove(sat.model);
         scene.remove(sat.orbitLine);
@@ -176,13 +188,8 @@ async function main() {
           }
         });
 
-        if (satelliteMode === 'AUTOMATIC') {
-          const idx = autoSatellites.indexOf(sat);
-          if (idx !== -1) autoSatellites.splice(idx, 1);
-        } else {
-          const idx = manualSatellites.indexOf(sat);
-          if (idx !== -1) manualSatellites.splice(idx, 1);
-        }
+        const idx = manualSatellites.indexOf(sat);
+        if (idx !== -1) manualSatellites.splice(idx, 1);
         refreshStatusList();
       }
     });
@@ -292,6 +299,14 @@ async function main() {
         sat.orbitLine.visible = visible;
       });
     },
+    onToggleISLLink: (enabled) => {
+      if (!enabled) {
+        setLinkLineVisible(false);
+        setCommsConsoleVisible(false);
+      } else {
+        setCommsConsoleVisible(true);
+      }
+    },
     onTogglePause: (paused) => {
       console.log(`Global simulation ${paused ? 'PAUSED' : 'RESUMED'}`);
     },
@@ -307,6 +322,9 @@ async function main() {
 
   // Initial live status rendering
   refreshStatusList();
+
+  // Initialize inter-satellite comms console
+  initCommsConsole();
 
   // 4. Animation loop
   let lastTime = performance.now();
@@ -340,6 +358,12 @@ async function main() {
       sat.orbit.getOrientation(_targetQuat);
       sat.model.quaternion.slerp(_targetQuat, 0.25);
     });
+
+    // Update inter-satellite link line and comms console telemetry (when enabled)
+    if (islLinkEnabled) {
+      const hasLOS = updateLinkLine(scene, currentActive, earth);
+      updateCommsConsole(currentActive, deltaTime, hasLOS);
+    }
 
     // Continuous slow Earth rotation
     if (earth) {

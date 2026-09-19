@@ -444,11 +444,168 @@
       border-color: rgba(239, 68, 68, 0.5);
       color: #f87171;
     }
+
+    /* Inter-Satellite Comms Console (Bottom-Left) */
+    #comms-console {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      z-index: 1000;
+      width: 480px;
+      max-width: calc(100vw - 28px);
+      background: rgba(10, 15, 26, 0.88);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+    }
+
+    .comms-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      background: rgba(15, 23, 42, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: #94a3b8;
+      text-transform: uppercase;
+    }
+
+    .comms-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #38bdf8;
+    }
+
+    .comms-status-indicator {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+      animation: comms-pulse 1.8s infinite ease-in-out;
+    }
+
+    .comms-status-indicator.offline {
+      background: #eab308;
+      box-shadow: 0 0 6px #eab308;
+      animation: none;
+    }
+
+    @keyframes comms-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.85); }
+    }
+
+    .comms-log {
+      height: 140px;
+      max-height: 140px;
+      min-height: 140px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(56, 189, 248, 0.25) transparent;
+      user-select: text;
+      box-sizing: border-box;
+    }
+
+    .comms-log::-webkit-scrollbar {
+      width: 4px;
+    }
+    .comms-log::-webkit-scrollbar-thumb {
+      background: rgba(56, 189, 248, 0.25);
+      border-radius: 4px;
+    }
+
+    .comms-line {
+      flex-shrink: 0;
+      height: 18px;
+      min-height: 18px;
+      font-size: 11px;
+      line-height: 18px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-sizing: border-box;
+    }
+
+    .comms-peer {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .comms-type {
+      color: #c084fc;
+      font-weight: 600;
+    }
+
+    .comms-dist {
+      color: #e2e8f0;
+    }
+
+    .comms-dv {
+      color: #fbbf24;
+    }
+
+    .comms-link-locked {
+      color: #4ade80;
+      font-weight: 600;
+    }
+
+    .comms-link-wait {
+      color: #f59e0b;
+      font-weight: 600;
+    }
+
+    .comms-link-obstructed {
+      color: #ef4444;
+      font-weight: 700;
+      text-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+    }
+
+    .comms-status-indicator.obstructed {
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+      animation: comms-pulse-fast 0.8s infinite ease-in-out;
+    }
+
+    @keyframes comms-pulse-fast {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.25; transform: scale(0.75); }
+    }
   </style>
 </head>
 <body>
   <div id="fps-counter">FPS: --</div>
   <div id="satellite-tooltip">S-1</div>
+
+  <!-- Inter-Satellite Comms Console (Bottom-Left) -->
+  <div id="comms-console">
+    <div class="comms-header">
+      <div class="comms-title">
+        <span class="comms-status-indicator" id="comms-status-dot"></span>
+        <span>ISL COMMS TERMINAL</span>
+      </div>
+      <span style="color: #64748b; font-size: 10px; font-weight: 600;">ACTIVE LINK</span>
+    </div>
+    <div class="comms-log" id="comms-log-container">
+      <!-- Live telemetry log lines -->
+    </div>
+  </div>
 
   <!-- Control Panel -->
   <div id="control-panel">
@@ -468,6 +625,12 @@
     <div class="control-row">
       <span class="control-label">Orbit Lines</span>
       <button class="toggle-btn on" id="orbit-lines-toggle">ON</button>
+    </div>
+
+    <!-- ISL Link Row -->
+    <div class="control-row">
+      <span class="control-label">ISL Link</span>
+      <button class="toggle-btn on" id="isl-link-toggle">ON</button>
     </div>
 
     <!-- Pause / Resume Row -->
