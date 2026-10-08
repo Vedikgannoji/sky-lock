@@ -124,6 +124,12 @@ class Session:
         if frame is None:
             return None
 
+        # Pass ephemeris cue and LOS status to tracker if source provides it
+        if hasattr(self.source, "get_cue"):
+            cue, los_clear = self.source.get_cue(frame.timestamp_s)
+            if hasattr(self.pipeline, "tracker") and hasattr(self.pipeline.tracker, "set_cue"):
+                self.pipeline.tracker.set_cue(cue, los_clear=los_clear)
+
         # 2. Process frame through pipeline (image-only)
         output = self.pipeline.process(frame)
 
@@ -139,8 +145,8 @@ class Session:
             dt=dt,
         )
 
-        # 4. Apply command to gimbal if simulation, delayed by latency_frames
-        if self.source.kind == InputKind.SIMULATION:
+        # 4. Apply command to gimbal if simulation or orbital, delayed by latency_frames
+        if self.source.kind in (InputKind.SIMULATION, InputKind.ORBITAL, "simulation", "orbital"):
             if self._latency_frames > 0:
                 self._cmd_queue.append(cmd)
                 delayed_cmd = self._cmd_queue.popleft()

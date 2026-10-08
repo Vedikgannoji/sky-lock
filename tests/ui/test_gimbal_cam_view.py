@@ -92,9 +92,11 @@ def test_dual_view_positional_consistency():
     """
     timestamps = [0.0, 1.0, 5.0, 12.5, 30.0, 60.0, 120.0]
 
+    from skylock.core.orbital_world import ORBIT_SPEED_SCALE
+
     orbit_configs = {
-        "s1": {"r": 20.0, "speed": 0.3, "inc": math.radians(25.0), "phase": math.radians(0.0)},
-        "s2": {"r": 26.0, "speed": 0.2, "inc": math.radians(65.0), "phase": math.radians(45.0)},
+        "s1": {"r": 20.0, "speed": 0.3 * ORBIT_SPEED_SCALE, "inc": math.radians(25.0), "phase": math.radians(0.0)},
+        "s2": {"r": 26.0, "speed": 0.2 * ORBIT_SPEED_SCALE, "inc": math.radians(65.0), "phase": math.radians(45.0)},
     }
 
     for sat_id, cfg in orbit_configs.items():

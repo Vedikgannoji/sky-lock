@@ -67,10 +67,11 @@ class ControlsPanel(QWidget):
     def __init__(self, editor: ConfigEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.editor = editor
-        self._block_signals = False
+        self._block_signals = True
         self._mp4_probe_ok = False  # Track whether MP4 probe succeeded
         self._error_labels: dict[str, QLabel] = {}  # key-substring -> inline error label
         self._build_ui()
+        self._block_signals = False
         self.sync_from_config(self.editor.config)
 
     # ------------------------------------------------------------------
@@ -153,7 +154,7 @@ class ControlsPanel(QWidget):
         input_box = QGroupBox("Input Source")
         i_layout = QFormLayout(input_box)
         self.cmb_input = NoWheelComboBox()
-        self.cmb_input.addItems(["Simulation", "MP4 Video"])
+        self.cmb_input.addItems(["Orbital (S-1 <-> S-2)", "Simulation", "MP4 Video"])
         self.cmb_input.currentIndexChanged.connect(self._on_input_changed)
         self.btn_browse_mp4 = QPushButton("Browse...")
         self.btn_browse_mp4.clicked.connect(self._browse_mp4)
@@ -388,6 +389,10 @@ class ControlsPanel(QWidget):
                 self.mp4_section.sync(
                     cfg.input.mp4_path, cfg.input.loop, cfg.input.fps_override
                 )
+            elif cfg.input.kind in (InputKind.ORBITAL, "orbital"):
+                self.cmb_input.setCurrentText("Orbital (S-1 <-> S-2)")
+                self.btn_browse_mp4.hide()
+                self.mp4_section.hide()
             else:
                 self.cmb_input.setCurrentText("Simulation")
                 self.btn_browse_mp4.hide()
@@ -455,10 +460,16 @@ class ControlsPanel(QWidget):
     def _on_input_changed(self) -> None:
         if self._block_signals:
             return
-        is_mp4 = self.cmb_input.currentText() == "MP4 Video"
+        txt = self.cmb_input.currentText()
+        is_mp4 = txt == "MP4 Video"
         self.btn_browse_mp4.setVisible(is_mp4)
         self.mp4_section.setVisible(is_mp4)
-        kind = InputKind.MP4.value if is_mp4 else InputKind.SIMULATION.value
+        if is_mp4:
+            kind = InputKind.MP4.value
+        elif txt == "Orbital (S-1 <-> S-2)":
+            kind = InputKind.ORBITAL.value
+        else:
+            kind = InputKind.SIMULATION.value
         self._mp4_probe_ok = False
         self._apply_dict({"input.kind": kind})
         self._update_start_enabled()

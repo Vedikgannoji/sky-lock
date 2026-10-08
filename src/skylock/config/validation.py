@@ -232,6 +232,10 @@ def validate_tracking(tracking: TrackingConfig) -> list[str]:
         violations.append(
             f"tracking.association_gate_px must be > 0, got {tracking.association_gate_px}"
         )
+    if tracking.ephemeris_error_deg < 0.0:
+        violations.append(
+            f"tracking.ephemeris_error_deg must be >= 0, got {tracking.ephemeris_error_deg}"
+        )
 
     violations.extend(validate_kalman(tracking.kalman))
     violations.extend(validate_search(tracking.search))
@@ -350,8 +354,8 @@ def validate_requirements(req: RequirementsConfig) -> list[str]:
 
 def validate_input(inp: InputConfig) -> list[str]:
     violations: list[str] = []
-    if inp.kind not in ("simulation", "mp4"):
-        violations.append(f"input.kind must be 'simulation' or 'mp4', got '{inp.kind}'")
+    if inp.kind not in ("simulation", "mp4", "orbital"):
+        violations.append(f"input.kind must be 'simulation', 'mp4', or 'orbital', got '{inp.kind}'")
     if inp.mp4_assumed_fov_h_deg <= 0.0 or inp.mp4_assumed_fov_h_deg >= 180.0:
         violations.append(
             f"input.mp4_assumed_fov_h_deg must be in (0, 180), got {inp.mp4_assumed_fov_h_deg}"
@@ -418,20 +422,21 @@ def validate_root(cfg: SkyLockConfig) -> list[str]:
             f"must be < requirements.lock_radius_px ({cfg.requirements.lock_radius_px})"
         )
 
-    # Screen extent vs gimbal limits
-    px_per_deg = cfg.camera.px_per_deg
-    left, right, bottom, top = cfg.screen.world_extent_deg(px_per_deg)
+    # Screen extent vs gimbal limits (simulation input only; orbital input operates on 3D sphere)
+    if cfg.input.kind not in ("orbital", "Orbital"):
+        px_per_deg = cfg.camera.px_per_deg
+        left, right, bottom, top = cfg.screen.world_extent_deg(px_per_deg)
 
-    if cfg.gimbal.pan_limit_deg[0] < left or cfg.gimbal.pan_limit_deg[1] > right:
-        violations.append(
-            f"gimbal.pan_limit_deg {cfg.gimbal.pan_limit_deg} extends beyond screen bounds "
-            f"({left:.2f}, {right:.2f}) deg"
-        )
+        if cfg.gimbal.pan_limit_deg[0] < left or cfg.gimbal.pan_limit_deg[1] > right:
+            violations.append(
+                f"gimbal.pan_limit_deg {cfg.gimbal.pan_limit_deg} extends beyond screen bounds "
+                f"({left:.2f}, {right:.2f}) deg"
+            )
 
-    if cfg.gimbal.tilt_limit_deg[0] < bottom or cfg.gimbal.tilt_limit_deg[1] > top:
-        violations.append(
-            f"gimbal.tilt_limit_deg {cfg.gimbal.tilt_limit_deg} extends beyond screen bounds "
-            f"({bottom:.2f}, {top:.2f}) deg"
-        )
+        if cfg.gimbal.tilt_limit_deg[0] < bottom or cfg.gimbal.tilt_limit_deg[1] > top:
+            violations.append(
+                f"gimbal.tilt_limit_deg {cfg.gimbal.tilt_limit_deg} extends beyond screen bounds "
+                f"({bottom:.2f}, {top:.2f}) deg"
+            )
 
     return violations

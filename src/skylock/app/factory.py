@@ -62,6 +62,46 @@ def create_session_components(
         )
         gimbal = VirtualGimbal(eff_config.gimbal)
         source: FrameSource = SimulationSource(eff_config, gimbal=gimbal)
+    elif config.input.kind in (InputKind.ORBITAL, "orbital"):
+        from dataclasses import replace
+
+        from skylock.core.sim_clock import get_shared_clock
+        from skylock.simulation.orbital_source import OrbitalSource
+
+        peer_key = "s2" if sat_key == "s1" else "s1"
+        eff_config = (
+            replace(config, seed=config.seed + 100)
+            if (sat_key == "s2" and config.seed is not None)
+            else config
+        )
+        # Live gimbal limits: pan +-180 wrap, tilt +-90, default max slew 10 deg/s
+        slew = (
+            10.0
+            if eff_config.gimbal.slew_rate_deg_s == 5.0
+            else min(10.0, eff_config.gimbal.slew_rate_deg_s)
+        )
+        live_gimbal = replace(
+            eff_config.gimbal,
+            pan_limit_deg=(-180.0, 180.0),
+            tilt_limit_deg=(-90.0, 90.0),
+            slew_rate_deg_s=slew,
+            max_slew_rate_deg_s=10.0,
+        )
+        eff_config = replace(eff_config, gimbal=live_gimbal)
+
+        pipeline = build_pipeline(eff_config)
+        controller = PointingController(
+            eff_config.control,
+            eff_config.camera,
+            max_slew_rate_deg_s=eff_config.gimbal.slew_rate_deg_s,
+            sat_id=sat_key,
+        )
+        source = OrbitalSource(
+            eff_config,
+            observer_id=sat_key,
+            peer_id=peer_key,
+            clock=get_shared_clock(),
+        )
     elif config.input.kind in (InputKind.MP4, "mp4"):
         from dataclasses import replace
 

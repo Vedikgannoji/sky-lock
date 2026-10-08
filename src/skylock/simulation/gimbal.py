@@ -103,6 +103,16 @@ class VirtualGimbal(GimbalPlant):
         self._at_limit_tilt = False
         self._clamp_to_limits()
 
+    def set_pointing(self, pan_deg: float, tilt_deg: float) -> None:
+        """Directly set gimbal pointing angles (e.g. at session start to cue)."""
+        self._pan = float(pan_deg)
+        self._tilt = float(tilt_deg)
+        self._target_pan = self._pan
+        self._target_tilt = self._tilt
+        self._pan_rate = 0.0
+        self._tilt_rate = 0.0
+        self._clamp_to_limits()
+
     def command(self, cmd: ControlCommand, dt: float) -> None:
         """Apply rate command and integrate gimbal dynamics across timestep dt.
 
@@ -148,10 +158,16 @@ class VirtualGimbal(GimbalPlant):
         pan_min, pan_max = self.config.pan_limit_deg
         tilt_min, tilt_max = self.config.tilt_limit_deg
 
+        pan_is_wrapped = (pan_min <= -180.0 and pan_max >= 180.0)
+
         for _ in range(substeps):
             # Compute desired velocity for PAN
             if self._mode == "POSITION":
-                err_pan = self._target_pan - self._pan
+                if pan_is_wrapped:
+                    from skylock.core.geometry import angular_diff_deg
+                    err_pan = angular_diff_deg(self._target_pan, self._pan)
+                else:
+                    err_pan = self._target_pan - self._pan
                 abs_err_pan = abs(err_pan)
                 if abs_err_pan < 0.005 and abs(self._pan_rate) < 0.2:
                     self._pan = self._target_pan
@@ -170,7 +186,11 @@ class VirtualGimbal(GimbalPlant):
             self._pan += self._pan_rate * sub_dt
 
             # Pan joint limits
-            if self._pan >= pan_max:
+            if pan_is_wrapped:
+                from skylock.core.geometry import wrap_deg
+                self._pan = wrap_deg(self._pan)
+                self._at_limit_pan = False
+            elif self._pan >= pan_max:
                 self._pan = pan_max
                 self._at_limit_pan = True
                 if self._pan_rate > 0.0:
@@ -222,7 +242,13 @@ class VirtualGimbal(GimbalPlant):
         pan_min, pan_max = self.config.pan_limit_deg
         tilt_min, tilt_max = self.config.tilt_limit_deg
 
-        if self._pan >= pan_max:
+        pan_is_wrapped = (pan_min <= -180.0 and pan_max >= 180.0)
+
+        if pan_is_wrapped:
+            from skylock.core.geometry import wrap_deg
+            self._pan = wrap_deg(self._pan)
+            self._at_limit_pan = False
+        elif self._pan >= pan_max:
             self._pan = pan_max
             self._at_limit_pan = True
         elif self._pan <= pan_min:

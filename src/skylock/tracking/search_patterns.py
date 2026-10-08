@@ -62,6 +62,11 @@ class RasterScan:
         # Total cycle time
         self._cycle_time = self._sweep_time * self._num_rows
 
+    @property
+    def field_of_regard(self) -> tuple[float, float]:
+        """Field of regard dimensions (pan_width, tilt_height) in degrees."""
+        return (self.pan_width, self.tilt_height)
+
     def recenter(self, new_center: tuple[float, float]) -> None:
         """Update the center point of the raster scan.
 

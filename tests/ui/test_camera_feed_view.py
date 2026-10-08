@@ -171,17 +171,21 @@ def test_status_feed_events_sequence(qapp) -> None:
     assert any("HANDSHAKE ESTABLISHED" in line for line in logs)
     assert "ACTIVE" in feed.lbl_handshake_indicator.text()
 
-    # 4. Advance to Earth occlusion (e.g. t=35.0s, when check_line_of_sight is False)
-    fv_s1_occ = _make_dummy_frame_view("s1", t_s=35.0, is_locked=True, state=TrackState.TRACK)
+    # 4. Advance to Earth occlusion (scaled by ORBIT_SPEED_SCALE)
+    from skylock.core.orbital_world import ORBIT_SPEED_SCALE
+
+    t_occ = 35.0 / ORBIT_SPEED_SCALE
+    fv_s1_occ = _make_dummy_frame_view("s1", t_s=t_occ, is_locked=True, state=TrackState.TRACK)
     feed.on_dual_frame_ready("s1", fv_s1_occ)
     logs = feed.get_log_lines()
     assert any("LINK BLOCKED (Earth occlusion)" in line for line in logs)
     assert "BLOCKED" in feed.lbl_link_indicator.text()
 
-    # 5. S-1 loses lock during occlusion at t=36.0s -> HANDSHAKE LOST
-    fv_s1_lost = _make_dummy_frame_view("s1", t_s=36.0, is_locked=False, state=TrackState.LOST)
+    # 5. S-1 loses lock during occlusion -> HANDSHAKE LOST
+    t_lost = 36.0 / ORBIT_SPEED_SCALE
+    fv_s1_lost = _make_dummy_frame_view("s1", t_s=t_lost, is_locked=False, state=TrackState.LOST)
     feed.on_dual_frame_ready("s1", fv_s1_lost)
     logs = feed.get_log_lines()
-    assert any("36.0s — S-1 LOST S-2" in line for line in logs)
+    assert any(f"{t_lost:.1f}s — S-1 LOST S-2" in line for line in logs)
     assert any("HANDSHAKE LOST" in line for line in logs)
     assert "OFF" in feed.lbl_handshake_indicator.text()

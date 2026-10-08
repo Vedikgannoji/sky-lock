@@ -35,6 +35,7 @@ class InputKind(StrEnum):
 
     SIMULATION = "simulation"
     MP4 = "mp4"
+    ORBITAL = "orbital"
 
 
 class ControlMode(StrEnum):

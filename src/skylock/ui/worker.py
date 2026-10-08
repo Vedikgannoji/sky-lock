@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from skylock.app.factory import build_session
 from skylock.app.session import Session
 from skylock.config.models import SkyLockConfig
-from skylock.core.enums import ControlMode, InputKind, TrackState
+from skylock.core.enums import InputKind, TrackState
 from skylock.core.types import StepResult
 from skylock.ui.live_metrics import LiveMetrics
 
@@ -53,6 +53,8 @@ class FrameView:
     live: dict = field(default_factory=dict)
     total_frames: int | None = None
     sat_id: str = "s1"
+    cue_active: bool = False
+    blocked: bool = False
 
 
 class SessionWorker(QObject):
@@ -593,12 +595,21 @@ class SessionWorker(QObject):
             (float(out.estimate.px), float(out.estimate.py)) if out.estimate else None
         )
 
+        # Query tracker for cue and blocked flags
+        sess = self._session_s1 if is_s1 else self._session_s2
+        cue_active = False
+        blocked = False
+        if sess is not None and hasattr(sess, "pipeline") and hasattr(sess.pipeline, "tracker"):
+            cue_active = bool(getattr(sess.pipeline.tracker, "cue_active", False))
+            blocked = bool(getattr(sess.pipeline.tracker, "blocked", False))
+
         # Update LiveMetrics and state history
         live_metrics.update(
             state=out.state,
             timestamp_s=frame.timestamp_s,
             n_detections=n_detections,
             tracking_error_px=tracking_err,
+            blocked=blocked,
         )
         state_history.append((frame.timestamp_s, out.state.name))
 
@@ -608,7 +619,6 @@ class SessionWorker(QObject):
 
         # Total frames from source if available
         total_frames: int | None = None
-        sess = self._session_s1 if is_s1 else self._session_s2
         if sess is not None and hasattr(sess, "source"):
             source = sess.source
             if hasattr(source, "frames_expected"):
@@ -643,6 +653,8 @@ class SessionWorker(QObject):
             live=live_metrics.snapshot(),
             total_frames=total_frames,
             sat_id=sat_id,
+            cue_active=cue_active,
+            blocked=blocked,
         )
 
 

@@ -55,6 +55,7 @@ class LiveMetrics:
         timestamp_s: float,
         n_detections: int,
         tracking_error_px: float | None,
+        blocked: bool = False,
     ) -> None:
         """Process a single frame update.
 
@@ -63,6 +64,7 @@ class LiveMetrics:
             timestamp_s: Timestamp of current frame in seconds.
             n_detections: Number of detections in this frame.
             tracking_error_px: Tracking error against ground truth in pixels, or None.
+            blocked: Whether line of sight is currently blocked (not a tracking failure).
         """
         self._frames += 1
         self._detections_total += max(0, n_detections)
@@ -87,10 +89,11 @@ class LiveMetrics:
         # Reacquisition duration = timestamp of first TRACK after a LOST (or REACQUIRE) period
         # minus timestamp of the TRACK->LOST transition.
         if self._prev_state is not None:
-            # Transition into loss: TRACK -> LOST or REACQUIRE
-            if self._prev_state == TrackState.TRACK and state in (
-                TrackState.LOST,
-                TrackState.REACQUIRE,
+            # Transition into loss: TRACK -> LOST or REACQUIRE (not counted if blocked by Earth LOS)
+            if (
+                not blocked
+                and self._prev_state == TrackState.TRACK
+                and state in (TrackState.LOST, TrackState.REACQUIRE)
             ):
                 if not self._in_loss:
                     self._in_loss = True

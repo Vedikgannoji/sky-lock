@@ -88,6 +88,19 @@ class Tracker:
         self._last_estimate: TargetEstimate | None = None
         self._last_pointing: Pointing = Pointing(pan_deg=0.0, tilt_deg=0.0)
 
+        # Ephemeris cueing and LOS occlusion state (live orbital sessions)
+        self.cue: tuple[float, float] | None = None
+        self.los_clear: bool = True
+        self.blocked: bool = False
+        self.cue_active: bool = False
+        self._cue_aligned: bool = False
+        self._cue_scan_configured: bool = False
+
+    def set_cue(self, cue: tuple[float, float] | None, los_clear: bool = True) -> None:
+        """Set ephemeris cue pointing setpoint and line-of-sight status."""
+        self.cue = cue
+        self.los_clear = bool(los_clear)
+
     @property
     def state(self) -> TrackState:
         """Current operational tracking state."""
@@ -106,6 +119,12 @@ class Tracker:
         self.spiral_scan = None
         self._last_estimate = None
         self._last_pointing = Pointing(pan_deg=0.0, tilt_deg=0.0)
+        self.cue = None
+        self.los_clear = True
+        self.blocked = False
+        self.cue_active = False
+        self._cue_aligned = False
+        self._cue_scan_configured = False
 
     def get_roi(
         self,
@@ -172,6 +191,22 @@ class Tracker:
             frame.pointing if frame.pointing is not None else Pointing(pan_deg=0.0, tilt_deg=0.0)
         )
         self._last_pointing = pointing
+
+        # 0. Check LOS occlusion (live orbital sessions)
+        if not self.los_clear:
+            self.blocked = True
+            self.cue_active = False
+            self._cue_aligned = False
+            self.state_machine.state = TrackState.LOST
+            intent = ControlIntent(
+                mode=ControlIntentMode.HOLD,
+                setpoint_pan_deg=pointing.pan_deg,
+                setpoint_tilt_deg=pointing.tilt_deg,
+                image_error_px=None,
+            )
+            return (TrackState.LOST, None, None, intent)
+
+        self.blocked = False
 
         prev_state = self.state_machine.state
 
@@ -339,17 +374,12 @@ class Tracker:
         boresight_x = (self.camera.width - 1.0) / 2.0
         boresight_y = (self.camera.height - 1.0) / 2.0
 
-        if curr_state == TrackState.SEARCH:
-            elapsed_search = t - self.state_machine.state_start_time
-            pan_sp, tilt_sp = self.raster_scan.setpoint(elapsed_search)
-            intent = ControlIntent(
-                mode=ControlIntentMode.GOTO,
-                setpoint_pan_deg=pan_sp,
-                setpoint_tilt_deg=tilt_sp,
-                image_error_px=None,
-            )
+        if curr_state in (TrackState.ACQUIRE, TrackState.TRACK):
+            # In ACQUIRE / TRACK the ephemeris cue is strictly ignored
+            self.cue_active = False
+            self._cue_aligned = False
+            self._cue_scan_configured = False
 
-        elif curr_state in (TrackState.ACQUIRE, TrackState.TRACK, TrackState.LOST):
             if estimate is not None:
                 err_px = (estimate.px - boresight_x, estimate.py - boresight_y)
                 intent = ControlIntent(
@@ -366,7 +396,69 @@ class Tracker:
                     image_error_px=None,
                 )
 
+        elif self.cue is not None and curr_state in (
+            TrackState.SEARCH,
+            TrackState.LOST,
+            TrackState.REACQUIRE,
+        ):
+            # CUE ACTIVE in SEARCH, LOST, or REACQUIRE
+            self.cue_active = True
+            cue_pan, cue_tilt = self.cue
+            dpan_cue = abs(angular_diff_deg(cue_pan, pointing.pan_deg))
+            dtilt_cue = abs(cue_tilt - pointing.tilt_deg)
+
+            # Slew to cue first if not aligned
+            if not self._cue_aligned and (dpan_cue > 0.5 or dtilt_cue > 0.5):
+                intent = ControlIntent(
+                    mode=ControlIntentMode.GOTO,
+                    setpoint_pan_deg=cue_pan,
+                    setpoint_tilt_deg=cue_tilt,
+                    image_error_px=None,
+                )
+            else:
+                self._cue_aligned = True
+                # Run existing scan recentered on cue with field of regard = max(3 * sigma, FOV/2)
+                sigma = float(getattr(self.tracking_cfg, "ephemeris_error_deg", 1.0))
+                for_h = max(3.0 * sigma, self.camera.fov_h_deg / 2.0)
+                for_v = max(3.0 * sigma, self.camera.fov_v_deg / 2.0)
+
+                if (
+                    not self._cue_scan_configured
+                    or self.raster_scan.field_of_regard != (for_h, for_v)
+                ):
+                    self.raster_scan = RasterScan(
+                        field_of_regard=(for_h, for_v),
+                        fov=(self.camera.fov_h_deg, self.camera.fov_v_deg),
+                        overlap=self.tracking_cfg.search.raster_overlap,
+                        scan_rate=self.tracking_cfg.search.scan_rate_deg_s,
+                        center=(cue_pan, cue_tilt),
+                    )
+                    self._cue_scan_configured = True
+                else:
+                    self.raster_scan.recenter((cue_pan, cue_tilt))
+
+                elapsed_search = t - self.state_machine.state_start_time
+                pan_sp, tilt_sp = self.raster_scan.setpoint(elapsed_search)
+                intent = ControlIntent(
+                    mode=ControlIntentMode.GOTO,
+                    setpoint_pan_deg=pan_sp,
+                    setpoint_tilt_deg=tilt_sp,
+                    image_error_px=None,
+                )
+
+        elif curr_state == TrackState.SEARCH:
+            self.cue_active = False
+            elapsed_search = t - self.state_machine.state_start_time
+            pan_sp, tilt_sp = self.raster_scan.setpoint(elapsed_search)
+            intent = ControlIntent(
+                mode=ControlIntentMode.GOTO,
+                setpoint_pan_deg=pan_sp,
+                setpoint_tilt_deg=tilt_sp,
+                image_error_px=None,
+            )
+
         elif curr_state == TrackState.REACQUIRE:
+            self.cue_active = False
             elapsed_reacquire = t - self.state_machine.state_start_time
             if self.spiral_scan is not None:
                 pan_sp, tilt_sp = self.spiral_scan.setpoint(elapsed_reacquire)
@@ -378,7 +470,26 @@ class Tracker:
                 setpoint_tilt_deg=tilt_sp,
                 image_error_px=None,
             )
+
+        elif curr_state == TrackState.LOST:
+            self.cue_active = False
+            if estimate is not None:
+                err_px = (estimate.px - boresight_x, estimate.py - boresight_y)
+                intent = ControlIntent(
+                    mode=ControlIntentMode.TRACK,
+                    setpoint_pan_deg=estimate.pan_deg,
+                    setpoint_tilt_deg=estimate.tilt_deg,
+                    image_error_px=err_px,
+                )
+            else:
+                intent = ControlIntent(
+                    mode=ControlIntentMode.TRACK,
+                    setpoint_pan_deg=pointing.pan_deg,
+                    setpoint_tilt_deg=pointing.tilt_deg,
+                    image_error_px=None,
+                )
         else:
+            self.cue_active = False
             intent = ControlIntent(
                 mode=ControlIntentMode.HOLD,
                 setpoint_pan_deg=pointing.pan_deg,

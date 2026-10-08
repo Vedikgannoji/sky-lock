@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 import skylock
-from skylock.config.models import SkyLockConfig
+from skylock.config.models import InputConfig, SkyLockConfig
 from skylock.core.geometry import angular_diff_deg
 from skylock.core.los import (
     OrbitParams,
@@ -36,6 +36,8 @@ from skylock.core.los import (
     orbit_position_at_time,
     slew_toward_target,
 )
+from skylock.core.orbital_world import ORBIT_SPEED_SCALE
+from skylock.core.sim_clock import get_shared_clock
 from skylock.ui import theme
 from skylock.ui.config_editor import ConfigEditor
 from skylock.ui.panels.benchmark import BenchmarkPanel
@@ -211,9 +213,13 @@ class MainWindow(QMainWindow):
         )
         QApplication.instance().installEventFilter(self._steering_filter)  # type: ignore[union-attr]
 
-        # Phase 4 Authoritative orbital & gimbal state
-        self._s1_orbit = OrbitParams(radius=20.0, speed=0.3, inclination_deg=25.0, phase_deg=0.0)
-        self._s2_orbit = OrbitParams(radius=26.0, speed=0.2, inclination_deg=65.0, phase_deg=45.0)
+        # Phase 4 Authoritative orbital & gimbal state with scaled speeds
+        self._s1_orbit = OrbitParams(
+            radius=20.0, speed=0.3 * ORBIT_SPEED_SCALE, inclination_deg=25.0, phase_deg=0.0
+        )
+        self._s2_orbit = OrbitParams(
+            radius=26.0, speed=0.2 * ORBIT_SPEED_SCALE, inclination_deg=65.0, phase_deg=45.0
+        )
         self._sim_time_s = 0.0
         self._current_pan = 0.0
         self._current_tilt = 0.0
@@ -570,9 +576,15 @@ class MainWindow(QMainWindow):
         self.camera_view.frame_painted.connect(self._worker.ack_frame)
         self.view_tabs.currentChanged.connect(lambda _: self._worker.ack_frame())
 
-        # Synchronized pause across both 3D views (Space Simulation tab & Gimbal Camera tab)
+        # Synchronized pause across both 3D views (Space Simulation tab & Gimbal Camera tab) and shared sim clock
         self.space_view_3d.pause_toggled.connect(self.camera_view.set_paused)
         self.camera_view.pause_toggled.connect(self.space_view_3d.set_paused)
+        self.space_view_3d.pause_toggled.connect(self._on_pause_clock_sync)
+        self.camera_view.pause_toggled.connect(self._on_pause_clock_sync)
+
+        # Push scaled orbit parameters to both 3D views when loaded
+        self.space_view_3d.scene_ready.connect(self._push_orbits_to_views)
+        self.camera_view.gimbal_cam.scene_ready.connect(self._push_orbits_to_views)
 
     def _on_frame_ready(self, fv: Any) -> None:  # noqa: ANN401
         """Update timeline, status bar, and 3D simulation with latest state."""
@@ -681,9 +693,49 @@ class MainWindow(QMainWindow):
 
     def _on_reset_ui(self) -> None:
         """Clear camera, timeline, and telemetry displays on reset."""
+        get_shared_clock().reset()
         self.camera_view.clear()
         self.state_timeline.clear()
         self.telemetry_panel.clear()
+
+    def _on_pause_clock_sync(self, paused: bool) -> None:
+        """Synchronize pause state to the authoritative simulation clock."""
+        clock = get_shared_clock()
+        if paused:
+            clock.pause()
+        else:
+            clock.resume()
+
+    def _push_orbits_to_views(self) -> None:
+        """Push scaled orbit parameters to both 3D visualization views."""
+        self.space_view_3d.set_satellite_orbit(
+            "s1",
+            self._s1_orbit.radius,
+            self._s1_orbit.inclination_deg,
+            self._s1_orbit.speed,
+            self._s1_orbit.phase_deg,
+        )
+        self.space_view_3d.set_satellite_orbit(
+            "s2",
+            self._s2_orbit.radius,
+            self._s2_orbit.inclination_deg,
+            self._s2_orbit.speed,
+            self._s2_orbit.phase_deg,
+        )
+        self.camera_view.gimbal_cam.set_satellite_orbit(
+            "s1",
+            self._s1_orbit.radius,
+            self._s1_orbit.inclination_deg,
+            self._s1_orbit.speed,
+            self._s1_orbit.phase_deg,
+        )
+        self.camera_view.gimbal_cam.set_satellite_orbit(
+            "s2",
+            self._s2_orbit.radius,
+            self._s2_orbit.inclination_deg,
+            self._s2_orbit.speed,
+            self._s2_orbit.phase_deg,
+        )
 
     def _on_session_error(self, err: str) -> None:
         self.status_bar.showMessage(f"Error: {err}", 5000)
@@ -841,6 +893,8 @@ def run_app(
     """Launch the SkyLock graphical user interface."""
     app = QApplication(argv if argv is not None else sys.argv)
     theme.apply_theme(app)
+    if initial_config is None:
+        initial_config = SkyLockConfig(input=InputConfig(kind="orbital"))
     window = MainWindow(initial_config=initial_config)
     window.show()
     return app.exec()

@@ -244,6 +244,8 @@ class TrackingConfig:
     reacquire_timeout_s: float = 1.0
     reacquire_radius_deg: float = 1.0
     association_gate_px: float = 50.0
+    use_ephemeris_cue: bool = True
+    ephemeris_error_deg: float = 1.0
     kalman: KalmanConfig = field(default_factory=KalmanConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
 
