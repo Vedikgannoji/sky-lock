@@ -187,14 +187,23 @@ class PointingController:
             self.pid_pan.reset()
             self.pid_tilt.reset()
 
-            if self._custom_sat_pos is not None:
-                target_pan, target_tilt, _ = calculate_look_angles(
-                    self._custom_sat_pos, (0.0, 0.0, 0.0)
+            obs_pos = (
+                self._custom_sat_pos
+                if self._custom_sat_pos is not None
+                else (
+                    get_satellite_position(self._sat_id, self._current_time_s, self._orbit_params)
+                    if self._orbit_params is not None
+                    else None
                 )
+            )
+            if obs_pos is not None:
+                target_pan, target_tilt, _ = calculate_look_angles(obs_pos, (0.0, 0.0, 0.0))
             else:
-                from skylock.core.orbital_world import earth_bearing
+                from skylock.core.orbital_world import dir_to_pan_tilt, earth_bearing
 
-                target_pan, target_tilt = earth_bearing(self._sat_id, self._current_time_s)
+                obs_spec = self._orbit_params if self._orbit_params is not None else self._sat_id
+                u_earth, _, _ = earth_bearing(obs_spec, self._current_time_s)
+                target_pan, target_tilt = dir_to_pan_tilt(u_earth)
 
             pt = pointing if pointing is not None else Pointing(0.0, 0.0)
             err_pan = angular_diff_deg(target_pan, pt.pan_deg)

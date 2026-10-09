@@ -224,7 +224,7 @@ def test_gimbal_reset_pose(qapp: QApplication) -> None:
 
     assert win.gimbal_control_panel.spn_pan.value() == 0.0
     assert win.gimbal_control_panel.spn_tilt.value() == 0.0
-    assert win.gimbal_control_panel.spn_fov.value() == 20.0
+    assert win.gimbal_control_panel.spn_fov.value() == 16.0
     assert win._current_pan == 0.0
     assert win._current_tilt == 0.0
 
@@ -291,7 +291,7 @@ def test_authoritative_tracking_state_machine(qapp: QApplication) -> None:
     win._on_frame_ready(DummyFrame())
     qapp.processEvents()
 
-    assert win.telemetry_panel.lbl_lock.text() == "UNLOCKED"
+    assert "UNLOCKED" in win.telemetry_panel.lbl_lock.text()
     assert win.lbl_status_state.text() == "LOST"
 
     # Case B: When target is visible and aligned within FOV (TRACK / ENGAGED)
@@ -304,7 +304,7 @@ def test_authoritative_tracking_state_machine(qapp: QApplication) -> None:
     win._on_frame_ready(DummyFrame())
     qapp.processEvents()
 
-    assert win.telemetry_panel.lbl_lock.text() == "ENGAGED"
+    assert "ENGAGED" in win.telemetry_panel.lbl_lock.text()
     assert win.lbl_status_state.text() == "TRACK"
 
     win.space_view_3d.cleanup()

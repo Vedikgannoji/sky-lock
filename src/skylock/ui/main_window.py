@@ -322,6 +322,8 @@ class MainWindow(QMainWindow):
         self.dock_telemetry = QDockWidget("Telemetry", self)
         right_container = QWidget()
         right_container.setMinimumWidth(0)
+        from PySide6.QtCore import QSize
+        right_container.minimumSizeHint = lambda: QSize(280, 0)
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
@@ -598,6 +600,33 @@ class MainWindow(QMainWindow):
             self.state_timeline.set_history(fv.state_history_tail)
 
         # Update status bar permanent widgets
+        if hasattr(fv, "track_state"):
+            state_name = (
+                fv.track_state.name
+                if hasattr(fv.track_state, "name")
+                else str(fv.track_state)
+            )
+            self.lbl_status_state.setText(state_name)
+        elif hasattr(self, "_s1_orbit") and self._s1_orbit is not None:
+            from skylock.core.geometry import angular_diff_deg
+            from skylock.core.los import calculate_look_angles, check_line_of_sight, orbit_position_at_time
+            t_s = getattr(self, "_sim_time_s", 0.0)
+            p1 = orbit_position_at_time(self._s1_orbit, t_s)
+            p2 = orbit_position_at_time(self._s2_orbit, t_s)
+            has_los = check_line_of_sight(p1, p2, body_radius=10.0)
+            if not has_los:
+                self.lbl_status_state.setText("LOST")
+                self.telemetry_panel.lbl_lock.setText("UNLOCKED")
+            else:
+                target_pan, target_tilt, _ = calculate_look_angles(p1, p2)
+                d_pan = abs(angular_diff_deg(target_pan, self._current_pan))
+                d_tilt = abs(angular_diff_deg(target_tilt, self._current_tilt))
+                if d_pan < 2.0 and d_tilt < 2.0:
+                    self.lbl_status_state.setText("TRACK")
+                    self.telemetry_panel.lbl_lock.setText("ENGAGED")
+                else:
+                    self.lbl_status_state.setText("ACQUIRE")
+                    self.telemetry_panel.lbl_lock.setText("ACQUIRING")
         if hasattr(fv, "frame_index"):
             self.lbl_status_frame.setText(f"frame {fv.frame_index}")
         if hasattr(fv, "wall_fps") and fv.wall_fps is not None:
