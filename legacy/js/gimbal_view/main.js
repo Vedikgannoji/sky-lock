@@ -450,7 +450,7 @@ function setupTrackingBeam() {
   trackingBeam.name = 'OpticalTrackingBeam';
   trackingBeam.visible = false;
   trackingBeam.frustumCulled = false;
-  scene.add(trackingBeam);
+  // Excluded from sensor camera POV: scene.add(trackingBeam);
 }
 
 function checkLineOfSight(p1, p2, radius = EARTH_RADIUS) {
@@ -608,7 +608,7 @@ function animate(now) {
         arr[5] = _s2BeaconPos.z;
         trackingBeamGeo.attributes.position.needsUpdate = true;
         trackingBeamGeo.computeBoundingSphere();
-        trackingBeam.visible = true;
+        trackingBeam.visible = false;
       } else {
         trackingBeam.visible = false;
       }

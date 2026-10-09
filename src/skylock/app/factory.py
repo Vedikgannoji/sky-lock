@@ -74,18 +74,14 @@ def create_session_components(
             if (sat_key == "s2" and config.seed is not None)
             else config
         )
-        # Live gimbal limits: pan +-180 wrap, tilt +-90, default max slew 10 deg/s
-        slew = (
-            10.0
-            if eff_config.gimbal.slew_rate_deg_s == 5.0
-            else min(10.0, eff_config.gimbal.slew_rate_deg_s)
-        )
+        # Live gimbal limits: pan +-180 wrap, tilt +-90, max slew capped at 10.0 deg/s
+        slew = min(10.0, max(0.1, float(eff_config.gimbal.slew_rate_deg_s)))
         live_gimbal = replace(
             eff_config.gimbal,
             pan_limit_deg=(-180.0, 180.0),
             tilt_limit_deg=(-90.0, 90.0),
             slew_rate_deg_s=slew,
-            max_slew_rate_deg_s=10.0,
+            max_slew_rate_deg_s=slew,
         )
         eff_config = replace(eff_config, gimbal=live_gimbal)
 

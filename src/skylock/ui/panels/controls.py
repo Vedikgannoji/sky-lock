@@ -134,16 +134,29 @@ class ControlsPanel(QWidget):
         layout_ops.addStretch()
         self.tabs.addTab(tab_ops, "Operations")
 
-        # Tab 2: Advanced (Disturbances, Presets, RNG Seed)
+        # Tab 2: Disturbances (formerly Advanced)
         tab_adv = QWidget()
         layout_adv = QVBoxLayout(tab_adv)
         layout_adv.setContentsMargins(2, 6, 2, 2)
         layout_adv.setSpacing(8)
+
+        # Mandatory separation note (Task 1 §2)
+        lbl_dist_note = QLabel(
+            "Disturbances affect the camera sensor feed only. "
+            "They do not modify the 3D orbital visualization."
+        )
+        lbl_dist_note.setWordWrap(True)
+        lbl_dist_note.setStyleSheet(
+            f"color: {theme.TEXT_SECONDARY.name()}; font-size: 11px; "
+            "padding: 4px 2px; font-style: italic;"
+        )
+        layout_adv.addWidget(lbl_dist_note)
+
         self._build_disturbance_section(layout_adv)
         self._build_presets_section(layout_adv)
         self._build_seed_section(layout_adv)
         layout_adv.addStretch()
-        self.tabs.addTab(tab_adv, "Advanced")
+        self.tabs.addTab(tab_adv, "Disturbances")
 
         layout.addWidget(self.tabs)
         layout.addStretch()
@@ -210,8 +223,8 @@ class ControlsPanel(QWidget):
         layout.addWidget(cam_box)
 
     def _build_target_section(self, layout: QVBoxLayout) -> None:
-        tgt_box = QGroupBox("Target Settings")
-        t_layout = QFormLayout(tgt_box)
+        self.tgt_box = QGroupBox("Target Settings")
+        t_layout = QFormLayout(self.tgt_box)
         t_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         t_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
@@ -244,16 +257,35 @@ class ControlsPanel(QWidget):
         t_layout.addRow(self.chk_rand_pos)
 
         self._add_error_label(t_layout, "target", "target_error")
-        layout.addWidget(tgt_box)
+        layout.addWidget(self.tgt_box)
 
     def _build_motion_section(self, layout: QVBoxLayout) -> None:
-        motion_box = QGroupBox("Motion Parameters")
-        ml = QVBoxLayout(motion_box)
+        self.motion_box = QGroupBox("Motion Parameters")
+        ml = QVBoxLayout(self.motion_box)
         self.motion_stack = MotionParamsStack(self)
         self.motion_stack.params_changed.connect(self._on_motion_params_changed)
         ml.addWidget(self.motion_stack)
         self._add_error_label(ml, "motion", "motion_error")
-        layout.addWidget(motion_box)
+        layout.addWidget(self.motion_box)
+
+    def _update_target_sections_state(self, kind: str) -> None:
+        """Enable or disable target & motion controls depending on input kind."""
+        is_sim = kind in (InputKind.SIMULATION.value, "simulation")
+        is_orb = kind in (InputKind.ORBITAL.value, "orbital")
+        self.tgt_box.setEnabled(is_sim)
+        self.motion_box.setEnabled(is_sim)
+        if is_sim:
+            self.tgt_box.setTitle("Target Settings")
+            self.tgt_box.setToolTip("Configure synthetic 2D target properties")
+            self.motion_box.setTitle("Motion Parameters")
+        elif is_orb:
+            self.tgt_box.setTitle("Target Settings (N/A — Orbital Mode)")
+            self.tgt_box.setToolTip("In orbital mode, target is the opposing satellite in 3D orbit")
+            self.motion_box.setTitle("Motion Parameters (N/A — Orbital Mode)")
+        else:
+            self.tgt_box.setTitle("Target Settings (N/A — Video Mode)")
+            self.tgt_box.setToolTip("In video mode, target detections come from video frames")
+            self.motion_box.setTitle("Motion Parameters (N/A — Video Mode)")
 
     def _build_disturbance_section(self, layout: QVBoxLayout) -> None:
         dist_box = QGroupBox("Disturbances")
@@ -398,6 +430,8 @@ class ControlsPanel(QWidget):
                 self.btn_browse_mp4.hide()
                 self.mp4_section.hide()
 
+            self._update_target_sections_state(cfg.input.kind)
+
             # Target
             self.spn_target_count.setValue(cfg.target.count)
             if cfg.target.targets:
@@ -470,6 +504,7 @@ class ControlsPanel(QWidget):
             kind = InputKind.ORBITAL.value
         else:
             kind = InputKind.SIMULATION.value
+        self._update_target_sections_state(kind)
         self._mp4_probe_ok = False
         self._apply_dict({"input.kind": kind})
         self._update_start_enabled()

@@ -428,9 +428,73 @@ class SessionWorker(QObject):
         if self._pending_frames > 0:
             self._pending_frames -= 1
 
+    def update_disturbances(self, dist_cfg: Any) -> None:
+        """Update disturbance parameters on running sessions without rebuild."""
+        from dataclasses import replace
+
+        self._config = replace(self._config, disturbances=dist_cfg)
+        for sess in (self._session_s1, self._session_s2):
+            if sess is not None:
+                sess.config = replace(sess.config, disturbances=dist_cfg)
+                if hasattr(sess.source, "disturbances") and hasattr(sess.source.disturbances, "update_config"):
+                    sess.source.disturbances.update_config(dist_cfg)
+
+    def set_camera_fov(self, fov_deg: float) -> None:
+        """Update horizontal FOV on running virtual camera and controller."""
+        from dataclasses import replace
+
+        fov_h = float(fov_deg)
+        fov_v = 0.75 * fov_h
+        new_cam = replace(self._config.camera, fov_h_deg=fov_h, fov_v_deg=fov_v)
+        self._config = replace(self._config, camera=new_cam)
+        for sess in (self._session_s1, self._session_s2):
+            if sess is not None:
+                sess.config = replace(sess.config, camera=new_cam)
+                if hasattr(sess.source, "camera"):
+                    sess.source.camera.config = new_cam
+                if hasattr(sess.controller, "camera_cfg"):
+                    sess.controller.camera_cfg = new_cam
+
+    def set_max_slew(self, slew_deg_s: float) -> None:
+        """Update max slew rate on running controllers and gimbals."""
+        from dataclasses import replace
+
+        slew = min(10.0, max(0.1, float(slew_deg_s)))
+        new_gimbal = replace(self._config.gimbal, slew_rate_deg_s=slew, max_slew_rate_deg_s=slew)
+        self._config = replace(self._config, gimbal=new_gimbal)
+        for sess in (self._session_s1, self._session_s2):
+            if sess is not None:
+                sess.config = replace(sess.config, gimbal=new_gimbal)
+                if hasattr(sess.controller, "max_slew_rate_deg_s"):
+                    sess.controller.max_slew_rate_deg_s = slew
+                if hasattr(sess.source, "gimbal") and hasattr(sess.source.gimbal, "config"):
+                    sess.source.gimbal.config = replace(
+                        sess.source.gimbal.config, slew_rate_deg_s=slew, max_slew_rate_deg_s=slew
+                    )
+
     @Slot(object)
     def apply_config(self, new_config: SkyLockConfig) -> None:
-        """Apply a new SkyLockConfig by rebuilding both sessions."""
+        """Apply a new SkyLockConfig.
+
+        If only disturbances changed on running sessions, apply them live to avoid
+        resetting the simulation time, orbits, and stateful RNG accumulators.
+        Otherwise, rebuild both sessions cleanly.
+        """
+        only_disturbances = (
+            self._session_s1 is not None
+            and self._session_s2 is not None
+            and self._config.input == new_config.input
+            and self._config.camera == new_config.camera
+            and self._config.target == new_config.target
+            and self._config.control == new_config.control
+            and self._config.gimbal == new_config.gimbal
+            and self._config.seed == new_config.seed
+            and self._config.disturbances != new_config.disturbances
+        )
+        if only_disturbances:
+            self.update_disturbances(new_config.disturbances)
+            return
+
         was_running = self._is_running
         self.stop_running()
         success = self._build_new_session(new_config)

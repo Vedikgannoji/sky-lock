@@ -1,0 +1,315 @@
+<USER_REQUEST>
+# SKYLOCK FINAL PASS — TASK 1
+## Operations, Camera Feed, Disturbances & UI Functionality
+
+You are working on the existing SkyLock Electro-Optical Tracking System project.
+
+**Objective:** Make the Operations panel, Disturbances panel, gimbal controls, and Camera Sensor Feed genuinely functional. Improve the camera-feed UX and remove unwanted visual artifacts.
+
+This is a functional implementation task, not a UI mockup.
+
+## 0. Inspect Before Editing
+
+Inspect the current working tree and identify the actual implementation of:
+
+- `src/skylock/ui/main_window.py`
+- `src/skylock/ui/panels/controls.py`
+- `src/skylock/ui/panels/controls_sections.py`
+- `src/skylock/ui/panels/gimbal_control.py`
+- `src/skylock/ui/panels/telemetry.py`
+- `src/skylock/ui/widgets/camera_view.py`
+- `src/skylock/ui/worker.py`
+- `src/skylock/simulation/camera.py`
+- `src/skylock/simulation/source.py`
+- `src/skylock/simulation/disturbances/`
+- `src/skylock/config/`
+- `src/skylock/core/pipeline.py`
+- Existing 3D and virtual-camera integration modules.
+
+Use the current files even if they differ from these paths.
+
+The older uploaded ZIP is a reference snapshot only. Do not restore it over the current code.
+
+Trace the actual data path from GUI controls through configuration, simulation, camera rendering, tracking, and telemetry before making changes.
+
+Preserve existing functionality wherever possible. Avoid creating a second camera, simulation, or tracking controller.
+
+## 1. Remove the tracking/link line from the camera image
+
+The Camera Sensor Feed currently shows a slight visibility of the tracking line when the optical link is active.
+
+Remove it completely from the camera image.
+
+The physical inter-satellite communication line may remain visible in the **3D Space Simulation view**, controlled by the existing Configuration toggle.
+
+However, the sensor image must not contain the rendered communication line, orbit visualization, scene labels, 3D overlays, or UI controls.
+
+The sensor feed should contain only objects and visual effects that genuinely belong in the selected virtual camera's view.
+
+Do not hide the line by painting a black rectangle over it. Exclude the link-line rendering from the sensor camera's render layer or use an equivalent correct rendering-layer solution.
+
+Verify both sensor perspectives.
+
+## 2. Rename Advanced to Disturbances
+
+Rename the left-panel `Advanced` tab to:
+
+**Disturbances**
+
+Add a short explanatory label at the top:
+
+"Disturbances affect the camera sensor feed only. They do not modify the 3D orbital visualization."
+
+This separation is mandatory.
+
+### Disturbance controls
+
+Preserve the existing controls and configuration models for:
+
+- Gaussian noise
+- Salt-and-pepper noise
+- Poisson photon noise
+- Camera jitter
+- Platform drift
+- Optical blur
+
+Do not remove or replace these controls merely to simplify the UI.
+
+Every enabled disturbance must affect the actual sensor image or camera pointing/ground-truth model according to its intended physical meaning.
+
+#### Photometric disturbances
+
+Apply Gaussian noise, salt-and-pepper noise, Poisson noise, and optical blur to the rendered sensor image in the correct processing pipeline.
+
+#### Camera jitter
+
+Apply jitter to the virtual camera's image-plane pointing or equivalent camera-model offset. It must affect the sensor image and relevant ground-truth/measurement calculations consistently.
+
+#### Platform drift
+
+Apply drift to the appropriate camera/platform image-plane model according to the existing disturbance specification. Do not move the visible orbital satellite in the 3D scene just because the user enabled this sensor disturbance.
+
+### Required behavior
+
+- Each enable checkbox must actually enable and disable its disturbance.
+- Each numeric control must update the running configuration.
+- Changes made while the session is running must take effect without requiring an application restart.
+- If a disturbance is disabled, its effect must stop.
+- Reset must reset stateful disturbance accumulators appropriately.
+- Preserve seeded randomness and repeatability when the same seed and configuration are used.
+- No disturbance should silently affect the 3D orbital geometry.
+- Display units and value ranges clearly.
+- Do not fake an effect by changing telemetry or a displayed number without changing the image.
+
+Add tests demonstrating that each disturbance changes the relevant output when enabled and that disabling it removes its effect. For stochastic disturbances, use controlled seeds and robust statistical or deterministic assertions rather than brittle exact-pixel assumptions.
+
+## 3. Make Operations functional
+
+Audit every control in the Operations tab and connect it to the real runtime.
+
+### Input Source
+
+Simulation and MP4 must both work.
+
+- Simulation uses the configured synthetic/virtual camera source.
+- MP4 uses the selected video source and follows the existing video validation and frame-handling logic.
+- Changing source must update the actual input pipeline, not only the dropdown label.
+- Invalid or missing MP4 input must produce a clear error.
+- Switching sources must safely rebuild or reconfigure the pipeline where required.
+
+Do not break existing MP4 support.
+
+### Gimbal Control Mode
+
+AUTO and MANUAL must be real operating modes.
+
+**AUTO:**
+- The controller calculates target pointing and commands the gimbal.
+- The gimbal slews according to the configured limits.
+- The camera feed follows the actual commanded gimbal state.
+- Tracking and telemetry reflect the actual state.
+
+**MANUAL:**
+- Automatic commands must not overwrite manual pointing commands.
+- Manual pan/tilt input must affect the selected virtual camera immediately.
+- Existing manual steering and keyboard controls must continue working.
+
+**Live mode switching is mandatory.**
+
+When switching MANUAL → AUTO, the actual controller must become active immediately and the camera feed must transition to automatic pointing.
+
+When switching AUTO → MANUAL, automatic commands must stop, and the camera must remain under manual control.
+
+Do not merely change the combo-box text. Do not reset the entire simulation or jump the gimbal to an unrelated orientation when switching modes.
+
+Ensure safe transitions, coherent controller state, and no competing commands from two controllers.
+
+### Camera FPS
+
+The camera FPS setting must control the sensor-processing/rendering cadence where practical.
+
+Changing FPS must affect the real frame/update schedule. Keep the GUI responsive and prevent uncontrolled timer creation or excessive CPU usage.
+
+### Max Slew
+
+The Max Slew setting must control actual gimbal movement in degrees per second.
+
+Test that changing the value changes the maximum commanded angular movement. Use elapsed simulation time rather than assuming a fixed time step.
+
+### Target settings and motion parameters
+
+Audit Count, Motion, Size, Shape, Random Initial Position, Speed, and every other existing Operations control.
+
+Each control must have a defined effect on the simulation mode where it applies.
+
+Do not allow generic 2D target settings to create arbitrary extra spacecraft in the orbital scene. Keep the orbital model's two spacecraft separate from synthetic sensor targets.
+
+If a setting does not apply to the currently selected source or mode, disable it with a clear explanation or provide a proper mode-specific implementation. Never leave it looking active when it does nothing.
+
+### Start, Stop, and Reset
+
+- Start starts the configured runtime.
+- Stop stops frame processing and control updates safely.
+- Reset returns the applicable simulation, camera, gimbal, tracker, and disturbance state to their defined initial conditions.
+- No duplicate worker loops or timers may be created.
+- UI state must reflect actual runtime state.
+
+## 4. Make the Gimbal Control panel functional
+
+The Pan, Tilt, FOV, Reset, and Track Target controls must operate on the actual selected camera.
+
+- Pan/Tilt changes affect the real gimbal.
+- FOV changes affect the real virtual camera.
+- Reset resets the selected gimbal to its defined default.
+- Track Target engages the actual pointing controller.
+- In AUTO mode, the controller owns pointing commands.
+- In MANUAL mode, manual controls own pointing commands.
+- Switching sensor perspective selects the corresponding camera and gimbal.
+
+Telemetry must read from the same authoritative state. Do not maintain separate fake UI values.
+
+Do not report TRACK/LOCK when geometry, field of view, or controller state says the target is not tracked.
+
+## 5. Remaster the Camera Sensor Feed UX
+
+The current sensor tab is cramped, confusing, and contains controls whose text is clipped or difficult to understand.
+
+Redesign it as a clear, professional technical instrument panel while retaining the existing dark SkyLock theme.
+
+### Recommended hierarchy
+
+**A. Top toolbar**
+- Clearly labeled perspective selector:
+  - `View S-2 from S-1`
+  - `View S-1 from S-2`
+- Clearly visible link status.
+- Current camera and target identifiers.
+- Avoid clipped or abbreviated labels.
+
+**B. Main sensor image**
+- Give the actual sensor image the majority of the available width and height.
+- Preserve the image aspect ratio.
+- Scale it correctly when the panel resizes.
+- Never stretch the image or replace it with a placeholder.
+- Keep overlays minimal and outside the raw sensor pixels where possible.
+
+**C. Compact connection/event log**
+- Display meaningful state transitions with timestamps.
+- Avoid repeating the same event every frame.
+- Limit memory usage by bounding the log.
+- Provide clear messages for LOS changes, acquisition, tracking, loss, and reacquisition.
+- Keep the log secondary to the image.
+
+**D. Camera status**
+Show the selected camera's pan, tilt, FOV, LOS, target visibility, and actual tracking state in a compact readable area.
+
+Do not duplicate the entire right-side telemetry panel inside the sensor tab.
+
+### UX requirements
+
+- All button labels must be fully visible at the default window size.
+- Dropdowns must be wide enough to display their options.
+- Use tooltips where a technical label needs clarification.
+- Use sensible minimum sizes and layouts that adapt to window resizing.
+- Remove redundant controls.
+- Ensure the image remains the dominant element.
+- Do not add decorative elements that resemble real detections or tracking results.
+
+## 6. No static controls or fake success states
+
+Audit every control in Operations, Disturbances, Gimbal Control, Camera Sensor Feed, and Configuration.
+
+Every visible enabled control must perform its advertised action.
+
+If a feature is not implemented or does not apply in the current mode:
+- implement it correctly, or
+- disable it with an explicit reason, or
+- remove it if it is genuinely obsolete.
+
+Do not leave nonfunctional buttons enabled.
+
+Do not claim a successful mode change, reset, tracking lock, or disturbance application until the real subsystem has accepted the change.
+
+## 7. Tests and verification
+
+Add tests covering:
+
+1. Every disturbance changes the correct sensor output when enabled.
+2. Disabled disturbances no longer affect output.
+3. Disturbances do not modify 3D orbital positions.
+4. Live disturbance changes reach the active pipeline.
+5. AUTO mode commands the gimbal.
+6. MANUAL mode prevents automatic pointing from overwriting manual commands.
+7. AUTO/MANUAL switching takes effect immediately.
+8. Max Slew limits angular movement.
+9. FOV changes the actual virtual camera.
+10. Perspective switching selects the correct camera and gimbal.
+11. The communication line is absent from both sensor images.
+12. The communication line remains available in the 3D visualization when enabled and LOS is clear.
+13. Start/Stop/Reset work without duplicate workers.
+14. Camera FPS affects actual processing cadence.
+15. Every enabled UI control has a real implementation.
+16. The redesigned sensor layout works at the default window size and when resized.
+
+Run the existing regression tests, not just the newly added tests.
+
+Launch the real GUI and manually verify both sensor perspectives, all disturbances, and AUTO/MANUAL switching.
+
+Do not proceed to Task 2 until this task is verified.
+
+## Definition of done
+
+The Camera Sensor Feed displays a clean actual camera image with no visible communication line.
+
+Every disturbance has a real, observable effect on the sensor feed and does not alter the 3D orbital visualization.
+
+Operations controls affect the running system.
+
+AUTO and MANUAL switch actual controller ownership in real time.
+
+Gimbal controls operate the selected camera.
+
+The sensor interface is clear and readable.
+
+No enabled control is a placeholder.
+
+Provide a concise implementation report listing files changed, tests run, pass/fail counts, any remaining limitations, and evidence of manual GUI verification.
+
+Do not claim that a visual/manual check was completed unless you actually performed it.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-09T22:54:10+05:30.
+
+The user's current state is as follows:
+Active Document: c:\Users\vedik\Downloads\sky-lock\legacy\js\gimbal_view\main.js (LANGUAGE_JAVASCRIPT)
+Cursor is on line: 1
+Other open documents:
+- c:\Users\vedik\Downloads\sky-lock\src\skylock\ui\web3d\view_3d.py (LANGUAGE_PYTHON)
+- c:\Users\vedik\Downloads\sky-lock\tests\ui\test_gimbal_cam_view.py (LANGUAGE_PYTHON)
+- c:\Users\vedik\Downloads\sky-lock\src\skylock\app\session.py (LANGUAGE_PYTHON)
+- c:\Users\vedik\Downloads\sky-lock\src\skylock\ui\panels\camera_feed_view.py (LANGUAGE_PYTHON)
+- c:\Users\vedik\Downloads\sky-lock\src\skylock\ui\panels\gimbal_control.py (LANGUAGE_PYTHON)
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Sonnet 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

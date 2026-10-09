@@ -665,17 +665,24 @@ class MainWindow(QMainWindow):
     def _on_gimbal_manual_pan(self, pan: float) -> None:
         sel_sat = self.camera_view.selected_satellite
         self._current_pan = float(pan)
+        if self._is_auto_tracking:
+            self._on_mode_changed("MANUAL")
+            self.controls_panel.cmb_mode.setCurrentText("MANUAL")
         self._worker.set_gimbal_pointing(sel_sat, self._current_pan, self._current_tilt)
 
     def _on_gimbal_manual_tilt(self, tilt: float) -> None:
         sel_sat = self.camera_view.selected_satellite
         self._current_tilt = float(tilt)
+        if self._is_auto_tracking:
+            self._on_mode_changed("MANUAL")
+            self.controls_panel.cmb_mode.setCurrentText("MANUAL")
         self._worker.set_gimbal_pointing(sel_sat, self._current_pan, self._current_tilt)
 
     def _on_gimbal_manual_fov(self, fov: float) -> None:
         self._current_fov = float(fov)
         self.space_view_3d.set_camera_fov(self._current_fov)
         self.camera_view.set_fov(self._current_fov)
+        self._worker.set_camera_fov(self._current_fov)
 
     def _on_gimbal_reset(self) -> None:
         sel_sat = self.camera_view.selected_satellite
@@ -683,6 +690,7 @@ class MainWindow(QMainWindow):
         self._current_tilt = 0.0
         self._current_fov = 16.0
         self._worker.set_gimbal_pointing(sel_sat, 0.0, 0.0)
+        self._worker.set_camera_fov(16.0)
         self.gimbal_control_panel.set_values(0.0, 0.0, 16.0, emit_signals=False)
         self.space_view_3d.reset_camera()
         self.camera_view.set_fov(16.0)

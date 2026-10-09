@@ -80,6 +80,43 @@ class DisturbanceStack:
         out = self.salt_pepper.apply(out, ctx)
         return out
 
+    def update_config(self, new_config: DisturbanceConfig) -> None:
+        """Apply a new DisturbanceConfig without resetting stateful RNGs.
+
+        Only config references are replaced; RNG state and history are preserved so
+        seeded repeatability is not broken by live edits during a session.
+        """
+        import math as _math
+
+        self.config = new_config
+        # Update config references on each sub-model (preserves RNG / accumulator state)
+        self.camera_jitter.config = new_config.camera_jitter
+        self.camera_jitter._max_px = min(20.0, max(0.0, float(new_config.camera_jitter.max_px_frame)))
+        self.camera_jitter._correlation = min(0.9999, max(0.0, float(new_config.camera_jitter.correlation)))
+        self.platform.config = new_config.platform
+        # Recompute effective velocity for platform (respects max_px_frame)
+        v_raw = new_config.platform.velocity_px_frame
+        if isinstance(v_raw, (int, float)):
+            vx, vy = float(v_raw), 0.0
+        else:
+            vx, vy = float(v_raw[0]), float(v_raw[1])
+        v_mag = _math.hypot(vx, vy)
+        max_limit = 20.0
+        if new_config.platform.max_px_frame > 0.0:
+            max_limit = min(20.0, float(new_config.platform.max_px_frame))
+        if v_mag > max_limit and v_mag > 0.0:
+            scale = max_limit / v_mag
+            self.platform._vx_eff = vx * scale
+            self.platform._vy_eff = vy * scale
+        else:
+            self.platform._vx_eff = vx
+            self.platform._vy_eff = vy
+        self.atmosphere.config = new_config.atmosphere
+        self.blur.config = new_config.blur
+        self.poisson.config = new_config.poisson
+        self.gaussian.config = new_config.gaussian
+        self.salt_pepper.config = new_config.salt_pepper
+
     def quantize(self, image: np.ndarray) -> np.ndarray:
         """Quantize float32 image to 8-bit unsigned integer with rounding and clipping."""
         return np.clip(np.round(image), 0, 255).astype(np.uint8)

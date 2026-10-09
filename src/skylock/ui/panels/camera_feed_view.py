@@ -108,6 +108,16 @@ class CameraFeedView(QWidget):
         self.combo_observer.currentIndexChanged.connect(self._on_observer_changed)
         bar_layout.addWidget(self.combo_observer)
 
+        # Current camera and target identifiers badge (Task 1 §5A)
+        self.lbl_id_badge = QLabel("HOST: S-1  ➔  TARGET: S-2", control_bar)
+        self.lbl_id_badge.setToolTip("Active host camera platform and target satellite")
+        self.lbl_id_badge.setStyleSheet(
+            f"background-color: {theme.ALT_BASE_BG.name()}; color: {theme.HIGHLIGHT_BG.name()}; "
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 3px 8px; "
+            f"font-weight: 700; font-size: 11px; font-family: Consolas;"
+        )
+        bar_layout.addWidget(self.lbl_id_badge)
+
         # Divider
         div1 = QFrame(control_bar)
         div1.setFrameShape(QFrame.Shape.VLine)
@@ -219,6 +229,52 @@ class CameraFeedView(QWidget):
         self.view_stack.setCurrentIndex(0)
         sec1_layout.addWidget(self.view_stack, stretch=1)
 
+        # Compact Technical Camera Status Bar (Task 1 §5D)
+        cam_status_bar = QFrame(section1_widget)
+        cam_status_bar.setStyleSheet(
+            f"QFrame {{ background-color: {theme.BASE_BG.name()}; "
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 2px 4px; }}"
+        )
+        cs_layout = QHBoxLayout(cam_status_bar)
+        cs_layout.setContentsMargins(8, 3, 8, 3)
+        cs_layout.setSpacing(12)
+
+        badge_style = (
+            f"color: {theme.TEXT_PRIMARY.name()}; font-size: 11px; font-weight: 700; font-family: Consolas;"
+        )
+
+        self.cs_camera = QLabel("CAM: S-1 ➔ S-2", cam_status_bar)
+        self.cs_camera.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_camera)
+
+        self.cs_pan = QLabel("PAN: +0.00°", cam_status_bar)
+        self.cs_pan.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_pan)
+
+        self.cs_tilt = QLabel("TILT: +0.00°", cam_status_bar)
+        self.cs_tilt.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_tilt)
+
+        self.cs_fov = QLabel("FOV: 16.0°", cam_status_bar)
+        self.cs_fov.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_fov)
+
+        self.cs_los = QLabel("LOS: CLEAR", cam_status_bar)
+        self.cs_los.setStyleSheet(f"color: {theme.COLOR_EMERALD.name()}; font-size: 11px; font-weight: 700;")
+        cs_layout.addWidget(self.cs_los)
+
+        self.cs_target = QLabel("TARGET: VISIBLE", cam_status_bar)
+        self.cs_target.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_target)
+
+        cs_layout.addStretch(1)
+
+        self.cs_state = QLabel("STATE: SEARCH", cam_status_bar)
+        self.cs_state.setStyleSheet(badge_style)
+        cs_layout.addWidget(self.cs_state)
+
+        sec1_layout.addWidget(cam_status_bar)
+
         # --------------------------------------------------------------------
         # SECTION 2: Live Communications & Status Text Feed
         # --------------------------------------------------------------------
@@ -261,6 +317,17 @@ class CameraFeedView(QWidget):
             f"padding: 2px 6px; font-weight: 700; font-size: 10px;"
         )
         hdr_layout.addWidget(self.lbl_handshake_indicator)
+
+        btn_clear = QPushButton("Clear", header_bar)
+        btn_clear.setToolTip("Clear status log history")
+        btn_clear.setStyleSheet(
+            f"QPushButton {{ background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 3px; padding: 2px 8px; "
+            f"font-size: 10px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background-color: {theme.BTN_HOVER_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; }}"
+        )
+        btn_clear.clicked.connect(self.clear_log)
+        hdr_layout.addWidget(btn_clear)
 
         sec2_layout.addWidget(header_bar)
 
@@ -371,6 +438,17 @@ class CameraFeedView(QWidget):
         self._handshake_active = False
         self._prev_los_blocked = None
         self._update_handshake_badge(False)
+        if hasattr(self, "cs_pan"):
+            host_str = "S-1" if self._selected_sat == "s1" else "S-2"
+            peer_str = "S-2" if self._selected_sat == "s1" else "S-1"
+            self.cs_camera.setText(f"CAM: {host_str} ➔ {peer_str}")
+            self.cs_pan.setText("PAN: +0.00°")
+            self.cs_tilt.setText("TILT: +0.00°")
+            self.cs_fov.setText("FOV: 16.0°")
+            self.cs_los.setText("LOS: CLEAR")
+            self.cs_los.setStyleSheet(f"color: {theme.COLOR_EMERALD.name()}; font-size: 11px; font-weight: 700;")
+            self.cs_target.setText("TARGET: VISIBLE")
+            self.cs_state.setText("STATE: SEARCH")
         t_now = get_shared_clock().now()
         self.append_log(f"{t_now:.1f}s — SYSTEM RESET — Dual tracking reset", "info")
 
@@ -407,9 +485,10 @@ class CameraFeedView(QWidget):
             sat_id = "s1" if index == 0 else "s2"
         self._selected_sat = sat_id
 
-        # Update dynamic label for target focus button
+        # Update dynamic label for target focus button and ID badge
         target_sat = "S-2" if sat_id == "s1" else "S-1"
         self.btn_focus_target.setText(f"Focus {target_sat}")
+        self.lbl_id_badge.setText(f"HOST: {'S-1' if sat_id == 's1' else 'S-2'}  ➔  TARGET: {target_sat}")
         self.gimbal_3d_view.set_mount(sat_id)
 
         # Update worker active satellite
@@ -579,6 +658,26 @@ class CameraFeedView(QWidget):
                     f"{t_sim:.1f}s — LINK RESTORED (LOS clear) — LOS restored - slewing to ephemeris cue", "clear"
                 )
                 self._update_link_badge(True)
+
+        # 5. Update compact camera status bar (Task 1 §5D)
+        if sat_id == self._selected_sat:
+            host_str = "S-1" if self._selected_sat == "s1" else "S-2"
+            peer_str = "S-2" if self._selected_sat == "s1" else "S-1"
+            self.cs_camera.setText(f"CAM: {host_str} ➔ {peer_str}")
+            self.cs_pan.setText(f"PAN: {fv.pointing_pan_deg:+.2f}°")
+            self.cs_tilt.setText(f"TILT: {fv.pointing_tilt_deg:+.2f}°")
+            fov_h = self.gimbal_3d_view.current_fov
+            self.cs_fov.setText(f"FOV: {fov_h:.1f}°")
+            los_txt = "BLOCKED" if los_blocked else "CLEAR"
+            los_col = theme.COLOR_ROSE.name() if los_blocked else theme.COLOR_EMERALD.name()
+            self.cs_los.setText(f"LOS: {los_txt}")
+            self.cs_los.setStyleSheet(f"color: {los_col}; font-size: 11px; font-weight: 700;")
+            has_det = len(fv.detections) > 0
+            self.cs_target.setText(
+                f"TARGET: {'DETECTED' if has_det else ('VISIBLE' if not los_blocked else 'OCCLUDED')}"
+            )
+            state_name = fv.track_state.name if hasattr(fv.track_state, "name") else str(fv.track_state)
+            self.cs_state.setText(f"STATE: {state_name}")
 
     # ------------------------------------------------------------------------
     # Status & Logging Helpers
