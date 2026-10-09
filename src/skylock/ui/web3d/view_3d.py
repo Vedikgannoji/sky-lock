@@ -148,10 +148,21 @@ class SpaceView3D(QWidget):
             logger.info("SpaceView3D WebGL scene loaded successfully")
             self.scene_ready.emit()
             # Push initial values
+            self.set_external_clock(True)
             self.set_gimbal_pose(self._last_pan, self._last_tilt)
             self.set_camera_fov(self._last_fov)
         else:
             logger.warning("SpaceView3D failed to load WebGL scene")
+
+    def set_time(self, time_sec: float) -> None:
+        """Synchronize the 3D orbital simulation time directly from the shared clock."""
+        js = f"window.skylock3d?.setTime({float(time_sec)});"
+        self._web_view.page().runJavaScript(js)
+
+    def set_external_clock(self, enabled: bool) -> None:
+        """Enable or disable external-clock mode."""
+        js_val = "true" if enabled else "false"
+        self._web_view.page().runJavaScript(f"window.skylock3d?.setExternalClock({js_val});")
 
     def set_gimbal_pose(self, pan_deg: float, tilt_deg: float) -> None:
         """Command the 3D gimbal pan and tilt angles in degrees."""

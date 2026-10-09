@@ -2,7 +2,7 @@
 
 Also contains ``GimbalOverlayWidget``, a transparent Qt painter layer that draws
 real-time tracking symbology (boresight, detections, gate, estimate) on top of
-the WebGL canvas, driven by live ``FrameView`` data from the session pipeline.
+the 4:3 letterboxed WebGL canvas, driven by live ``FrameView`` data from the session pipeline.
 """
 
 from __future__ import annotations
@@ -10,10 +10,11 @@ from __future__ import annotations
 import base64
 import logging
 import math
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QUrl, Qt, Signal
 from PySide6.QtGui import QImage, QPainter, QPen
 from PySide6.QtWebEngineCore import QWebEngineSettings
@@ -22,24 +23,12 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from skylock.config.models import CameraConfig
 from skylock.core.geometry import angle_offset_to_pixel, pixel_to_angle_offset
+from skylock.core.orbital_world import pan_tilt_to_world_aim
+from skylock.core.sim_clock import get_shared_clock
 from skylock.ui import theme
 from skylock.ui.web3d.server import Embedded3DServer
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _SensorSpec:
-    """Lightweight camera spec for angle<->pixel conversion (mimics CameraConfig)."""
-
-    width: int
-    height: int
-    fov_h_deg: float
-    fov_v_deg: float
-
-
-# Grayscale sensor camera config (640x480, 4°H x 3°V)
-_SENSOR_CAM = _SensorSpec(width=640, height=480, fov_h_deg=4.0, fov_v_deg=3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -49,23 +38,31 @@ _SENSOR_CAM = _SensorSpec(width=640, height=480, fov_h_deg=4.0, fov_v_deg=3.0)
 class GimbalOverlayWidget(QWidget):
     """Transparent overlay that paints tracking symbology on the gimbal POV canvas.
 
-    The widget covers the entire parent widget (QWebEngineView) and is kept
-    invisible to mouse events so the underlying WebGL scene still receives them.
+    The widget covers exactly the 4:3 letterboxed render rectangle of the WebGL view
+    and is kept invisible to mouse events so the underlying canvas still receives them.
 
     Coordinate conversion pipeline
     --------------------------------
-    1. Grayscale pipeline outputs detections/estimate in 640×480 sensor-pixel space.
-    2. ``_pixel_to_angle`` maps them to tangent-plane angular offsets from boresight
-       (same math as ``geometry.pixel_to_angle_offset`` — FOV 4°×3°).
-    3. ``_angle_to_pixel`` remaps into *this overlay's* pixel space, preserving the
-       same FOV — so the angular position always matches the 3D render.
+    1. Grayscale pipeline outputs detections/estimate in sensor-pixel space (live camera config).
+    2. ``_pixel_to_angle`` maps them to tangent-plane angular offsets from boresight.
+    3. ``_angle_to_pixel`` remaps into *this overlay's* pixel space using the live 3D render
+       camera FOV (4:3 aspect) — so the angular position always matches the 3D render exactly.
     """
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(
+        self,
+        parent: QWidget,
+        camera_config: CameraConfig | None = None,
+        render_fov_h_deg: float = 16.0,
+    ) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self._camera_cfg = camera_config if camera_config is not None else CameraConfig()
+        self._render_fov_h = float(render_fov_h_deg)
+        self._render_fov_v = 0.75 * self._render_fov_h
 
         # Payload — set via update_data()
         self._detections: tuple[tuple[float, float, float, float], ...] = ()
@@ -77,6 +74,19 @@ class GimbalOverlayWidget(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def set_camera_config(self, cfg: CameraConfig) -> None:
+        """Update live camera sensor hardware configuration."""
+        self._camera_cfg = cfg
+        self.update()
+
+    def set_fov(self, fov_h_deg: float, fov_v_deg: float | None = None) -> None:
+        """Update active 3D camera render FOV."""
+        self._render_fov_h = float(fov_h_deg)
+        self._render_fov_v = (
+            float(fov_v_deg) if fov_v_deg is not None else 0.75 * self._render_fov_h
+        )
+        self.update()
+
     def update_data(
         self,
         detections: tuple[tuple[float, float, float, float], ...],
@@ -104,21 +114,21 @@ class GimbalOverlayWidget(QWidget):
     # Coordinate helpers
     # ------------------------------------------------------------------
     def _sensor_to_overlay(self, spx: float, spy: float) -> tuple[float, float]:
-        """Map a sensor-pixel coordinate (640×480) to this overlay's pixel space."""
-        overlay_cam = _SensorSpec(
+        """Map sensor pixel coordinate to overlay pixel space matching 3D render FOV."""
+        dpan, dtilt = pixel_to_angle_offset(spx, spy, self._camera_cfg)
+        overlay_cam = CameraConfig(
             width=max(1, self.width()),
             height=max(1, self.height()),
-            fov_h_deg=_SENSOR_CAM.fov_h_deg,
-            fov_v_deg=_SENSOR_CAM.fov_v_deg,
+            fov_h_deg=self._render_fov_h,
+            fov_v_deg=self._render_fov_v,
         )
-        dpan, dtilt = pixel_to_angle_offset(spx, spy, _SENSOR_CAM)  # type: ignore[arg-type]
-        return angle_offset_to_pixel(dpan, dtilt, overlay_cam)  # type: ignore[arg-type]
+        return angle_offset_to_pixel(dpan, dtilt, overlay_cam)
 
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------
     def paintEvent(self, _event: Any) -> None:  # noqa: ANN401
-        """Paint tracking symbology on top of the WebGL canvas."""
+        """Paint tracking symbology on top of the 4:3 letterboxed canvas."""
         w_w = self.width()
         w_h = self.height()
         if w_w <= 0 or w_h <= 0:
@@ -155,11 +165,10 @@ class GimbalOverlayWidget(QWidget):
 
             # Gate box
             if self._gate_px > 0:
-                # Scale gate from sensor pixel space to overlay pixel space
-                scale_x = w_w / float(_SENSOR_CAM.width)
-                scale_y = w_h / float(_SENSOR_CAM.height)
-                g_w = self._gate_px * 2.0 * scale_x
-                g_h = self._gate_px * 2.0 * scale_y
+                gate_deg_h = self._gate_px * (self._camera_cfg.fov_h_deg / float(self._camera_cfg.width))
+                gate_deg_v = self._gate_px * (self._camera_cfg.fov_v_deg / float(self._camera_cfg.height))
+                g_w = gate_deg_h * (float(w_w) / self._render_fov_h) * 2.0
+                g_h = gate_deg_v * (float(w_h) / self._render_fov_v) * 2.0
                 gate_rect = QRectF(ex - g_w / 2.0, ey - g_h / 2.0, g_w, g_h)
                 painter.setPen(QPen(theme.OVERLAY_GATE, 1.0, Qt.PenStyle.DashLine))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -188,19 +197,26 @@ class GimbalCamView(QWidget):
         self,
         parent: QWidget | None = None,
         server: Embedded3DServer | None = None,
+        camera_config: CameraConfig | None = None,
     ) -> None:
         super().__init__(parent)
         self.setMinimumSize(320, 240)
 
         self._server = server or Embedded3DServer.get_shared_server()
+        self._camera_cfg = camera_config if camera_config is not None else CameraConfig()
 
         self._is_ready = False
         self._mount_sat = "s1"
         self._focus_mode = "TARGET"
         self._last_pan = 0.0
         self._last_tilt = 0.0
-        self._last_fov = 3.0
+        self._last_fov_h = 16.0
+        self._last_fov_v = 12.0
         self._is_paused = False
+
+        self._last_forward = (1.0, 0.0, 0.0)
+        self._last_up = (0.0, 1.0, 0.0)
+        self._last_push_time = 0.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -216,8 +232,12 @@ class GimbalCamView(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
-        # Transparent tracking-symbology overlay (stacked on top of web view)
-        self._overlay = GimbalOverlayWidget(self)
+        # Transparent tracking-symbology overlay (covers exact letterboxed 4:3 render rect)
+        self._overlay = GimbalOverlayWidget(
+            self,
+            camera_config=self._camera_cfg,
+            render_fov_h_deg=self._last_fov_h,
+        )
         self._overlay.raise_()
 
         self._web_view.loadFinished.connect(self._on_load_finished)
@@ -273,13 +293,23 @@ class GimbalCamView(QWidget):
 
     @property
     def current_fov(self) -> float:
-        """Current camera FOV in degrees."""
-        return self._last_fov
+        """Current camera horizontal FOV in degrees."""
+        return self._last_fov_h
 
     @property
     def last_fov(self) -> float:
-        """Last commanded camera FOV in degrees."""
-        return self._last_fov
+        """Last commanded camera horizontal FOV in degrees."""
+        return self._last_fov_h
+
+    @property
+    def current_fov_h(self) -> float:
+        """Current camera horizontal FOV in degrees."""
+        return self._last_fov_h
+
+    @property
+    def current_fov_v(self) -> float:
+        """Current camera vertical FOV in degrees."""
+        return self._last_fov_v
 
     def _on_load_finished(self, success: bool) -> None:
         """Invoked when web view finishes loading."""
@@ -288,32 +318,91 @@ class GimbalCamView(QWidget):
             logger.info("GimbalCamView WebGL scene loaded successfully")
             self.scene_ready.emit()
             # Push initial values
+            self._web_view.page().runJavaScript("window.gimbalcam?.setExternalClock(true);")
             self.set_mount(self._mount_sat)
-            self.set_focus_mode(self._focus_mode)
-            self.set_pose(self._last_pan, self._last_tilt)
-            self.set_fov(self._last_fov)
+            self.set_fov(self._last_fov_h)
+            self.set_aim(self._last_forward, self._last_up, force=True)
             self.set_paused(self._is_paused)
         else:
             logger.warning("GimbalCamView failed to load WebGL scene")
 
     def resizeEvent(self, event: Any) -> None:  # noqa: ANN401
-        """Keep tracking overlay exactly covering the web view."""
+        """Keep tracking overlay exactly covering the letterboxed 4:3 render rect."""
         super().resizeEvent(event)
-        self._overlay.setGeometry(0, 0, self.width(), self.height())
+        w = self.width()
+        h = self.height()
+        target_aspect = 4.0 / 3.0
+        if w <= 0 or h <= 0:
+            return
+
+        if w / h > target_aspect:
+            vh = h
+            vw = int(round(h * target_aspect))
+            vx = int(round((w - vw) / 2.0))
+            vy = 0
+        else:
+            vw = w
+            vh = int(round(w / target_aspect))
+            vx = 0
+            vy = int(round((h - vh) / 2.0))
+
+        self._overlay.setGeometry(vx, vy, vw, vh)
         self._overlay.raise_()
 
-    def set_pose(self, pan_deg: float, tilt_deg: float) -> None:
-        """Command the gimbal camera orientation in degrees."""
-        self._last_pan = float(pan_deg)
-        self._last_tilt = float(tilt_deg)
-        js = f"window.gimbalcam?.setPose({self._last_pan}, {self._last_tilt});"
+    def set_aim(
+        self,
+        forward: tuple[float, float, float] | np.ndarray,
+        up: tuple[float, float, float] | np.ndarray,
+        force: bool = False,
+        pan_deg: float | None = None,
+        tilt_deg: float | None = None,
+    ) -> None:
+        """Command 3D gimbal camera forward and up unit vectors in world space.
+
+        Throttled to <= 60 Hz to avoid flooding the WebEngine bridge.
+        """
+        fx = float(forward[0])
+        fy = float(forward[1])
+        fz = float(forward[2])
+        ux = float(up[0])
+        uy = float(up[1])
+        uz = float(up[2])
+
+        self._last_forward = (fx, fy, fz)
+        self._last_up = (ux, uy, uz)
+        if pan_deg is not None:
+            self._last_pan = float(pan_deg)
+        if tilt_deg is not None:
+            self._last_tilt = float(tilt_deg)
+
+        now = time.monotonic()
+        if not force and (now - self._last_push_time < 1.0 / 60.0):
+            return
+        self._last_push_time = now
+
+        js = f"window.gimbalcam?.setAim({fx:.6f}, {fy:.6f}, {fz:.6f}, {ux:.6f}, {uy:.6f}, {uz:.6f});"
         self._web_view.page().runJavaScript(js)
 
-    def set_fov(self, fov_deg: float) -> None:
-        """Update the 3D gimbal camera FOV in degrees."""
-        self._last_fov = float(fov_deg)
-        js = f"window.gimbalcam?.setFov({self._last_fov});"
+    def set_pose(self, pan_deg: float, tilt_deg: float) -> None:
+        """Command gimbal pan/tilt angles (converts via observer frame math into world aim)."""
+        self._last_pan = float(pan_deg)
+        self._last_tilt = float(tilt_deg)
+        t_now = get_shared_clock().now()
+        f_vec, u_vec = pan_tilt_to_world_aim(self._mount_sat, self._last_pan, self._last_tilt, t_now)
+        self.set_aim(f_vec, u_vec)
+
+    def set_fov(self, fov_h_deg: float) -> None:
+        """Update 3D gimbal camera horizontal FOV in degrees (vertical is 0.75x at 4:3)."""
+        self._last_fov_h = float(fov_h_deg)
+        self._last_fov_v = 0.75 * self._last_fov_h
+        self._overlay.set_fov(self._last_fov_h, self._last_fov_v)
+        js = f"window.gimbalcam?.setFov({self._last_fov_h});"
         self._web_view.page().runJavaScript(js)
+
+    def set_camera_config(self, cfg: CameraConfig) -> None:
+        """Update live camera sensor hardware configuration for the overlay."""
+        self._camera_cfg = cfg
+        self._overlay.set_camera_config(cfg)
 
     def set_mount(self, sat_id: str) -> None:
         """Set which satellite hosts the first-person gimbal camera ('s1' or 's2')."""
@@ -326,8 +415,6 @@ class GimbalCamView(QWidget):
         """Command the camera aim focus mode ('TARGET', 'EARTH', or 'MANUAL')."""
         m = str(mode).upper()
         self._focus_mode = "EARTH" if m in ("EARTH", "EARTH_BORESIGHT") else "TARGET"
-        js = f"window.gimbalcam?.setFocusMode('{self._focus_mode}');"
-        self._web_view.page().runJavaScript(js)
 
     def set_paused(self, paused: bool) -> None:
         """Pause or resume the 3D orbital clock."""
@@ -361,12 +448,13 @@ class GimbalCamView(QWidget):
         self._web_view.page().runJavaScript(js)
 
     def reset_pose(self) -> None:
-        """Reset gimbal camera to neutral pose (pan=0°, tilt=0°, fov=3°)."""
+        """Reset gimbal camera to neutral pose (pan=0°, tilt=0°, default FOV=16°x12°)."""
         self._last_pan = 0.0
         self._last_tilt = 0.0
-        self._last_fov = 3.0
+        self._last_fov_h = 16.0
+        self._last_fov_v = 12.0
+        self.set_fov(16.0)
         self.set_pose(0.0, 0.0)
-        self.set_fov(3.0)
         self._overlay.clear_data()
 
     # ------------------------------------------------------------------
@@ -382,7 +470,7 @@ class GimbalCamView(QWidget):
         """Push real pipeline data to the tracking overlay.
 
         Args:
-            detections: Sequence of (cx, cy, w, h) in *sensor* pixel space (640×480).
+            detections: Sequence of (cx, cy, w, h) in sensor pixel space.
             estimate:   Kalman estimate (px, py) in sensor pixel space, or ``None``.
             gate_px:    Gate half-width in sensor pixels.
             is_predicting: True when state is LOST/REACQUIRE (dashed estimate cross).
@@ -406,15 +494,16 @@ class GimbalCamView(QWidget):
         return {
             "mount": self._mount_sat,
             "focus_mode": self._focus_mode,
-            "focusMode": self._focus_mode,
             "pan": self._last_pan,
             "tilt": self._last_tilt,
-            "fov": self._last_fov,
+            "fov": self._last_fov_h,
+            "fov_h": self._last_fov_h,
+            "fov_v": self._last_fov_v,
             "is_paused": self._is_paused,
         }
 
     def capture_frame(self, callback: Callable[[QImage | None], None]) -> None:
-        """Capture the current 3D WebGL render with tracking overlay composited on top."""
+        """Capture current 3D WebGL render with tracking overlay composited on top."""
 
         def on_js_done(data_url: Any) -> None:
             if not data_url or not isinstance(data_url, str) or not data_url.startswith("data:image"):
@@ -429,7 +518,7 @@ class GimbalCamView(QWidget):
                 # Composite the Qt tracking overlay on top
                 overlay_pix = self._overlay.grab()
                 painter = QPainter(img)
-                painter.drawPixmap(0, 0, overlay_pix)
+                painter.drawPixmap(self._overlay.x(), self._overlay.y(), overlay_pix)
                 painter.end()
                 callback(img)
             except Exception as e:

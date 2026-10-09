@@ -37,7 +37,7 @@ def test_gimbal_cam_view_properties(qapp):
     assert view.is_paused is False
     assert view.last_pan == 0.0
     assert view.last_tilt == 0.0
-    assert view.last_fov == 3.0
+    assert view.last_fov == 16.0
 
     # Update pose
     view.set_pose(15.5, -7.2)
@@ -68,7 +68,7 @@ def test_gimbal_cam_view_properties(qapp):
     view.reset_pose()
     assert view.last_pan == 0.0
     assert view.last_tilt == 0.0
-    assert view.last_fov == 3.0
+    assert view.last_fov == 16.0
 
 
 def test_shared_embedded_server_multi_bundle(qapp):

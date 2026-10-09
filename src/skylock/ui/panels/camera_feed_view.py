@@ -1,7 +1,8 @@
 """Composite panel for the Camera Sensor Feed tab.
 
-Combines Section 1 (Observer-switchable sensor imagery with Earth/AUTO/MANUAL focus controls)
-and Section 2 (Real-time communications, lock transitions, LOS occlusion, and handshake event log).
+Combines Section 1 (Observer-switchable sensor imagery with Earth/AUTO/MANUAL focus controls,
+and CAMERA (3D) | SENSOR (mono) view toggle) and Section 2 (Real-time communications, lock
+transitions, LOS occlusion, and handshake event log driven by the shared simulation clock).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -26,16 +28,18 @@ from PySide6.QtWidgets import (
 
 from skylock.core.enums import ControlMode, TrackState
 from skylock.core.los import check_line_of_sight, get_satellite_position
+from skylock.core.orbital_world import pan_tilt_to_world_aim
+from skylock.core.sim_clock import get_shared_clock
 from skylock.ui import theme
-from skylock.ui.widgets.camera_view import CameraView
 from skylock.ui.web3d.gimbal_cam_view import GimbalCamView
+from skylock.ui.widgets.camera_view import CameraView
 from skylock.ui.worker import FrameView, SessionWorker
 
 
 class CameraFeedView(QWidget):
     """Integrated Camera Sensor Feed tab containing sensor view and live status log."""
 
-    frame_painted = Signal()  # Forwarded from inner CameraView for back-pressure
+    frame_painted = Signal()  # Forwarded from inner views for back-pressure
     pause_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -44,6 +48,7 @@ class CameraFeedView(QWidget):
         self._steering_filter: Any = None
         self._selected_sat: str = "s1"  # "s1" or "s2"
         self._is_paused: bool = False
+        self._active_view_mode: str = "CAMERA"  # "CAMERA" or "SENSOR"
 
         # State tracking for events
         self._s1_locked = False
@@ -104,10 +109,10 @@ class CameraFeedView(QWidget):
         bar_layout.addWidget(self.combo_observer)
 
         # Divider
-        div = QFrame(control_bar)
-        div.setFrameShape(QFrame.Shape.VLine)
-        div.setStyleSheet(f"color: {theme.BORDER_NORMAL.name()};")
-        bar_layout.addWidget(div)
+        div1 = QFrame(control_bar)
+        div1.setFrameShape(QFrame.Shape.VLine)
+        div1.setStyleSheet(f"color: {theme.BORDER_NORMAL.name()};")
+        bar_layout.addWidget(div1)
 
         # Focus mode controls
         lbl_mode = QLabel("FOCUS:", control_bar)
@@ -154,6 +159,40 @@ class CameraFeedView(QWidget):
         self.btn_focus_target.clicked.connect(lambda: self._set_pointing_mode("AUTO"))
         self.btn_manual.clicked.connect(lambda: self._set_pointing_mode("MANUAL"))
 
+        # Divider
+        div2 = QFrame(control_bar)
+        div2.setFrameShape(QFrame.Shape.VLine)
+        div2.setStyleSheet(f"color: {theme.BORDER_NORMAL.name()};")
+        bar_layout.addWidget(div2)
+
+        # View Toggle: CAMERA (3D) | SENSOR (mono)
+        lbl_view = QLabel("VIEW:", control_bar)
+        lbl_view.setStyleSheet(
+            f"color: {theme.TEXT_SECONDARY.name()}; font-weight: 700; font-size: 11px; border: none;"
+        )
+        bar_layout.addWidget(lbl_view)
+
+        self.view_toggle_group = QButtonGroup(control_bar)
+        self.view_toggle_group.setExclusive(True)
+
+        self.btn_view_camera = QPushButton("CAMERA (3D)", control_bar)
+        self.btn_view_camera.setCheckable(True)
+        self.btn_view_camera.setChecked(True)
+        self.btn_view_camera.setToolTip("First-person 3D simulation with live tracking symbology overlay")
+        self.btn_view_camera.setStyleSheet(btn_style)
+        self.view_toggle_group.addButton(self.btn_view_camera, 0)
+        bar_layout.addWidget(self.btn_view_camera)
+
+        self.btn_view_sensor = QPushButton("SENSOR (mono)", control_bar)
+        self.btn_view_sensor.setCheckable(True)
+        self.btn_view_sensor.setToolTip("Raw monochrome detector camera frame from the tracking pipeline")
+        self.btn_view_sensor.setStyleSheet(btn_style)
+        self.view_toggle_group.addButton(self.btn_view_sensor, 1)
+        bar_layout.addWidget(self.btn_view_sensor)
+
+        self.btn_view_camera.clicked.connect(lambda: self._set_active_view("CAMERA"))
+        self.btn_view_sensor.clicked.connect(lambda: self._set_active_view("SENSOR"))
+
         bar_layout.addStretch(1)
 
         # Status badge for selected session
@@ -167,14 +206,18 @@ class CameraFeedView(QWidget):
 
         sec1_layout.addWidget(control_bar)
 
-        # Core CameraView widget (keeps running headless/unattached-to-the-UI for metrics, benchmarks, and backpressure)
-        self._camera_view = CameraView(section1_widget)
-        self._camera_view.hide()
-        self._camera_view.frame_painted.connect(self.frame_painted.emit)
+        # Stacked display: CAMERA (3D) on page 0, SENSOR (mono) on page 1
+        self.view_stack = QStackedWidget(section1_widget)
 
-        # Primary visual: First-person 3D Gimbal POV Camera View
-        self.gimbal_3d_view = GimbalCamView(section1_widget)
-        sec1_layout.addWidget(self.gimbal_3d_view, stretch=1)
+        self.gimbal_3d_view = GimbalCamView(self.view_stack)
+        self.view_stack.addWidget(self.gimbal_3d_view)
+
+        self._camera_view = CameraView(self.view_stack)
+        self._camera_view.frame_painted.connect(self.frame_painted.emit)
+        self.view_stack.addWidget(self._camera_view)
+
+        self.view_stack.setCurrentIndex(0)
+        sec1_layout.addWidget(self.view_stack, stretch=1)
 
         # --------------------------------------------------------------------
         # SECTION 2: Live Communications & Status Text Feed
@@ -235,7 +278,7 @@ class CameraFeedView(QWidget):
         )
         sec2_layout.addWidget(self.log_text, stretch=1)
 
-        # Initial splitter proportions: 70% left, 30% right
+        # Splitter proportions: 70% left, 30% right
         splitter.addWidget(section1_widget)
         splitter.addWidget(section2_widget)
         splitter.setStretchFactor(0, 7)
@@ -243,7 +286,8 @@ class CameraFeedView(QWidget):
         splitter.setSizes([750, 320])
 
         # Initial log message
-        self.append_log("0.0s — SYSTEM READY — Dual-Direction Tracking Initialized", "info")
+        t_init = get_shared_clock().now()
+        self.append_log(f"{t_init:.1f}s — SYSTEM READY — Dual-Direction Tracking Initialized", "info")
 
     # ------------------------------------------------------------------------
     # Public API & Proxies (for 100% test & main_window compatibility)
@@ -268,7 +312,7 @@ class CameraFeedView(QWidget):
         self.pause_toggled.emit(self._is_paused)
 
     def set_fov(self, fov_deg: float) -> None:
-        """Set vertical FOV for the 3D gimbal camera POV."""
+        """Set horizontal FOV for the 3D gimbal camera POV (vertical derived at 0.75x)."""
         self.gimbal_3d_view.set_fov(fov_deg)
 
     @property
@@ -286,6 +330,10 @@ class CameraFeedView(QWidget):
         self._steering_filter = steering_filter
         worker.dual_frame_ready.connect(self.on_dual_frame_ready)
         worker.session_rebuilt.connect(self._on_session_rebuilt)
+
+        sess = worker.get_session(self._selected_sat)
+        if sess is not None and hasattr(sess, "config"):
+            self.gimbal_3d_view.set_camera_config(sess.config.camera)
 
     @property
     def _frame_view(self) -> FrameView | None:
@@ -323,7 +371,8 @@ class CameraFeedView(QWidget):
         self._handshake_active = False
         self._prev_los_blocked = None
         self._update_handshake_badge(False)
-        self.append_log("0.0s — SYSTEM RESET — Dual tracking reset", "info")
+        t_now = get_shared_clock().now()
+        self.append_log(f"{t_now:.1f}s — SYSTEM RESET — Dual tracking reset", "info")
 
     def get_log_lines(self) -> list[str]:
         """Return list of recent plain-text log lines."""
@@ -337,6 +386,19 @@ class CameraFeedView(QWidget):
     # ------------------------------------------------------------------------
     # Control Actions
     # ------------------------------------------------------------------------
+    def _set_active_view(self, mode: str) -> None:
+        """Toggle between CAMERA (3D render + overlay) and SENSOR (mono pipeline)."""
+        self._active_view_mode = mode
+        if mode == "SENSOR":
+            self.btn_view_sensor.setChecked(True)
+            self.view_stack.setCurrentIndex(1)
+            self._camera_view.show()
+            self._camera_view.update()
+        else:
+            self.btn_view_camera.setChecked(True)
+            self.view_stack.setCurrentIndex(0)
+            self.gimbal_3d_view.show()
+
     @Slot(int)
     def _on_observer_changed(self, index: int) -> None:
         """Handle observer switch without disturbing the non-displayed session."""
@@ -353,9 +415,11 @@ class CameraFeedView(QWidget):
         # Update worker active satellite
         if self._worker is not None:
             self._worker.set_active_satellite(sat_id)
+            sess = self._worker.get_session(sat_id)
+            if sess is not None and hasattr(sess, "config"):
+                self.gimbal_3d_view.set_camera_config(sess.config.camera)
 
             # Query newly selected session's actual mode and sync button state
-            sess = self._worker.get_session(sat_id)
             if sess is not None and hasattr(sess, "controller"):
                 current_mode = sess.controller.mode
             else:
@@ -384,10 +448,12 @@ class CameraFeedView(QWidget):
             latest_fv = self._worker.get_latest_frame_view(sat_id)
             if latest_fv is not None:
                 self._camera_view.update_frame(latest_fv)
-                self.gimbal_3d_view.set_pose(
-                    latest_fv.pointing_pan_deg, latest_fv.pointing_tilt_deg
+                t_sim = get_shared_clock().now()
+                f_vec, u_vec = pan_tilt_to_world_aim(
+                    sat_id, latest_fv.pointing_pan_deg, latest_fv.pointing_tilt_deg, t_sim
                 )
-                self.gimbal_3d_view.set_time(latest_fv.timestamp_s)
+                self.gimbal_3d_view.set_aim(f_vec, u_vec, force=True)
+                self.gimbal_3d_view.set_time(t_sim)
 
     def _set_pointing_mode(self, mode: str) -> None:
         """Set pointing mode for the currently selected session."""
@@ -425,14 +491,26 @@ class CameraFeedView(QWidget):
     @Slot(str, object)
     def on_dual_frame_ready(self, sat_id: str, fv: FrameView) -> None:
         """Process incoming frame view for display and real-time state events."""
-        t_s = fv.timestamp_s
+        if self._worker is None and hasattr(fv, "timestamp_s"):
+            get_shared_clock().reset(fv.timestamp_s)
+            t_sim = float(fv.timestamp_s)
+        else:
+            t_sim = get_shared_clock().now()
 
         # 1. Update display if frame is from the selected observer
         if sat_id == self._selected_sat:
             self._camera_view.update_frame(fv)
             self._update_selected_badge(fv.track_state)
-            self.gimbal_3d_view.set_pose(fv.pointing_pan_deg, fv.pointing_tilt_deg)
-            self.gimbal_3d_view.set_time(t_s)
+
+            # Push aim derived from Phase 1A observer frame math and shared clock
+            f_vec, u_vec = pan_tilt_to_world_aim(
+                self._selected_sat, fv.pointing_pan_deg, fv.pointing_tilt_deg, t_sim
+            )
+            self.gimbal_3d_view.set_aim(
+                f_vec, u_vec, pan_deg=fv.pointing_pan_deg, tilt_deg=fv.pointing_tilt_deg
+            )
+            self.gimbal_3d_view.set_time(t_sim)
+
             # Push real pipeline symbology to the 3D gimbal overlay
             is_predicting = fv.track_state in (TrackState.LOST, TrackState.REACQUIRE)
             self.gimbal_3d_view.update_overlay(
@@ -447,35 +525,35 @@ class CameraFeedView(QWidget):
         if sat_id == "s1":
             if fv.is_locked and not self._s1_locked:
                 self._s1_locked = True
-                self.append_log(f"{t_s:.1f}s — S-1 LOCKED on S-2", "lock")
+                self.append_log(f"{t_sim:.1f}s — S-1 LOCKED on S-2", "lock")
             elif not fv.is_locked and self._s1_locked:
                 self._s1_locked = False
-                self.append_log(f"{t_s:.1f}s — S-1 LOST S-2", "lost")
+                self.append_log(f"{t_sim:.1f}s — S-1 LOST S-2", "lost")
 
         elif sat_id == "s2":
             if fv.is_locked and not self._s2_locked:
                 self._s2_locked = True
-                self.append_log(f"{t_s:.1f}s — S-2 LOCKED on S-1", "lock")
+                self.append_log(f"{t_sim:.1f}s — S-2 LOCKED on S-1", "lock")
             elif not fv.is_locked and self._s2_locked:
                 self._s2_locked = False
-                self.append_log(f"{t_s:.1f}s — S-2 LOST S-1", "lost")
+                self.append_log(f"{t_sim:.1f}s — S-2 LOST S-1", "lost")
 
         # 3. Two-way Handshake Detection
         both_locked = self._s1_locked and self._s2_locked
         if both_locked and not self._handshake_active:
             self._handshake_active = True
             self.append_log(
-                f"{t_s:.1f}s — HANDSHAKE ESTABLISHED (Dual Lock)", "handshake"
+                f"{t_sim:.1f}s — HANDSHAKE ESTABLISHED (Dual Lock)", "handshake"
             )
             self._update_handshake_badge(True)
         elif not both_locked and self._handshake_active:
             self._handshake_active = False
-            self.append_log(f"{t_s:.1f}s — HANDSHAKE LOST", "lost")
+            self.append_log(f"{t_sim:.1f}s — HANDSHAKE LOST", "lost")
             self._update_handshake_badge(False)
 
         # 4. Geometric Line-of-Sight & Earth Occlusion
-        p1 = get_satellite_position("s1", t_s)
-        p2 = get_satellite_position("s2", t_s)
+        p1 = get_satellite_position("s1", t_sim)
+        p2 = get_satellite_position("s2", t_sim)
         los_clear = check_line_of_sight(p1, p2)
         los_blocked = not los_clear
 
@@ -483,21 +561,23 @@ class CameraFeedView(QWidget):
             self._prev_los_blocked = los_blocked
             if los_blocked:
                 self.append_log(
-                    f"{t_s:.1f}s — LINK BLOCKED (Earth occlusion)", "occluded"
+                    f"{t_sim:.1f}s — LINK BLOCKED (Earth occlusion) — BLOCKED - gimbal holding", "occluded"
                 )
                 self._update_link_badge(False)
             else:
-                self.append_log(f"{t_s:.1f}s — LINK ACTIVE (LOS clear)", "clear")
+                self.append_log(f"{t_sim:.1f}s — LINK ACTIVE (LOS clear)", "clear")
                 self._update_link_badge(True)
         elif los_blocked != self._prev_los_blocked:
             self._prev_los_blocked = los_blocked
             if los_blocked:
                 self.append_log(
-                    f"{t_s:.1f}s — LINK BLOCKED (Earth occlusion)", "occluded"
+                    f"{t_sim:.1f}s — LINK BLOCKED (Earth occlusion) — BLOCKED - gimbal holding", "occluded"
                 )
                 self._update_link_badge(False)
             else:
-                self.append_log(f"{t_s:.1f}s — LINK RESTORED (LOS clear)", "clear")
+                self.append_log(
+                    f"{t_sim:.1f}s — LINK RESTORED (LOS clear) — LOS restored - slewing to ephemeris cue", "clear"
+                )
                 self._update_link_badge(True)
 
     # ------------------------------------------------------------------------

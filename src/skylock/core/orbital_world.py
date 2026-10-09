@@ -144,6 +144,54 @@ def get_satellite_basis(
     return (x_basis, y_basis, z_basis)
 
 
+def pan_tilt_to_world_aim(
+    observer: str | OrbitParams,
+    pan_deg: float,
+    tilt_deg: float,
+    t_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate world forward and up unit vectors for a gimbal pointing in the observer frame.
+
+    Args:
+        observer: Satellite identifier ('s1', 's2') or OrbitParams.
+        pan_deg: Commanded or actual gimbal pan (azimuth) angle in degrees.
+        tilt_deg: Commanded or actual gimbal tilt (elevation) angle in degrees.
+        t_s: Simulation time in seconds.
+
+    Returns:
+        (forward, up) unit vectors as 3D numpy arrays in world Cartesian coordinates.
+    """
+    pan_rad = math.radians(pan_deg)
+    tilt_rad = math.radians(tilt_deg)
+
+    cos_tilt = math.cos(tilt_rad)
+    sin_tilt = math.sin(tilt_rad)
+    cos_pan = math.cos(pan_rad)
+    sin_pan = math.sin(pan_rad)
+
+    dx = cos_tilt * cos_pan
+    dy = cos_tilt * sin_pan
+    dz = -sin_tilt
+
+    ux = -sin_tilt * cos_pan
+    uy = -sin_tilt * sin_pan
+    uz = -cos_tilt
+
+    x_b, y_b, z_b = get_satellite_basis(observer, t_s)
+
+    forward = dx * x_b + dy * y_b + dz * z_b
+    norm_f = np.linalg.norm(forward)
+    if norm_f > 1e-12:
+        forward /= norm_f
+
+    up = ux * x_b + uy * y_b + uz * z_b
+    norm_u = np.linalg.norm(up)
+    if norm_u > 1e-12:
+        up /= norm_u
+
+    return (forward, up)
+
+
 def peer_bearing(
     observer: str | OrbitParams,
     t_s: float,
@@ -283,5 +331,6 @@ __all__ = (
     "get_default_orbit",
     "get_satellite_basis",
     "pan_tilt_to_dir",
+    "pan_tilt_to_world_aim",
     "peer_bearing",
 )

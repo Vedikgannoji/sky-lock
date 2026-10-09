@@ -9,7 +9,7 @@ import { OrbitState } from '../orbit.js';
 
 const EARTH_RADIUS = 10.0;
 const EARTH_ROTATION_SPEED = 0.08; // rad/s
-const SATELLITE_SCALE = 0.3;
+const SATELLITE_SCALE = 0.3; // max dimension normalized to 0.6 => ~8.5% of frame at dist 25, FOV 16°
 
 // Math helpers
 const _position = new THREE.Vector3();
@@ -23,28 +23,64 @@ let simulationSpeed = 1.0;
 let isReady = false;
 let hasLineOfSight = false;
 let mountSatId = 's1'; // 's1' or 's2'
-let focusMode = 'TARGET'; // 'TARGET' or 'EARTH'
+let externalClockMode = true; // external clock mode: setTime(t) drives orbits; internal clock never advances
 
-// Gimbal & FOV state
-let currentPanDeg = 0.0;
-let currentTiltDeg = 0.0;
-let currentFovDeg = 3.0;
-let hasCustomPose = false;
+// Gimbal & FOV state (default 16° horizontal x 12° vertical at 4:3 aspect)
+let currentFovHDeg = 16.0;
+let currentFovVDeg = 12.0;
 let currentTime = 0.0;
+
+// Commanded Camera Aim (Forward and Up unit vectors in world coordinates)
+const aimForward = new THREE.Vector3(1, 0, 0);
+const aimUp = new THREE.Vector3(0, 1, 0);
+
+// Viewport layout (4:3 letterboxed)
+let viewportX = 0;
+let viewportY = 0;
+let viewportWidth = 0;
+let viewportHeight = 0;
 
 // Three.js Core Objects
 let scene, camera, renderer;
 let earthMesh = null;
 let sat1Obj = null;
 let sat2Obj = null;
-let beacon1Mesh = null;
-let beacon2Mesh = null;
+let beacon1Sprite = null;
+let beacon2Sprite = null;
 let orbit1 = null;
 let orbit2 = null;
 
 // Optical Tracking Beam Line
 let trackingBeam = null;
 let trackingBeamGeo = null;
+
+// ============================================================
+// TEXTURE GENERATION
+// ============================================================
+
+function createBeaconTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+
+  // Multi-stop radial gradient for rich additive optical glow
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.15, 'rgba(125, 211, 252, 0.95)');
+  grad.addColorStop(0.35, 'rgba(56, 189, 248, 0.6)');
+  grad.addColorStop(0.65, 'rgba(14, 165, 233, 0.2)');
+  grad.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
 
 // ============================================================
 // SCENE SETUP
@@ -59,15 +95,15 @@ function initScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x020408);
 
-  // Background stars / particle field
+  // Background stars
   createStarfield();
 
-  // First-Person Perspective Gimbal Camera
-  camera = new THREE.PerspectiveCamera(currentFovDeg, width / height, 0.1, 10000);
-  camera.rotation.order = 'YXZ';
+  // Perspective camera (vertical FOV derived from 16° horizontal at 4:3 aspect)
+  computeVerticalFov();
+  camera = new THREE.PerspectiveCamera(currentFovVDeg, 4 / 3, 0.1, 2000);
   scene.add(camera);
 
-  // Renderer
+  // Renderer matching 3D Space tab settings
   renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: 'high-performance',
@@ -79,9 +115,13 @@ function initScene() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = false;
+  renderer.autoClear = false;
   container.appendChild(renderer.domElement);
 
-  // Lighting (Identical to 3D Space Simulation tab)
+  // Initial letterboxed viewport calculation
+  updateViewport();
+
+  // Lighting (identical to 3D Space tab)
   const sunLight = new THREE.DirectionalLight(0xffffff, 3.2);
   sunLight.position.set(30, 15, 20);
   scene.add(sunLight);
@@ -102,6 +142,48 @@ function initScene() {
 
   // Resize handler
   window.addEventListener('resize', onWindowResize);
+}
+
+function computeVerticalFov() {
+  // THREE camera.fov is vertical: derive it from horizontal FOV at aspect 4:3
+  // tan(fov_v / 2) = (3 / 4) * tan(fov_h / 2)
+  const fovHRad = THREE.MathUtils.degToRad(currentFovHDeg);
+  const fovVRad = 2.0 * Math.atan(0.75 * Math.tan(fovHRad / 2.0));
+  currentFovVDeg = THREE.MathUtils.radToDeg(fovVRad);
+}
+
+function updateViewport() {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const targetAspect = 4 / 3;
+
+  if (width / height > targetAspect) {
+    viewportHeight = height;
+    viewportWidth = Math.round(height * targetAspect);
+    viewportX = Math.round((width - viewportWidth) / 2);
+    viewportY = 0;
+  } else {
+    viewportWidth = width;
+    viewportHeight = Math.round(width / targetAspect);
+    viewportX = 0;
+    viewportY = Math.round((height - viewportHeight) / 2);
+  }
+
+  if (renderer) {
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(window.devicePixelRatio);
+  }
+
+  computeVerticalFov();
+  if (camera) {
+    camera.fov = currentFovVDeg;
+    camera.aspect = targetAspect;
+    camera.updateProjectionMatrix();
+  }
+}
+
+function onWindowResize() {
+  updateViewport();
 }
 
 function createStarfield() {
@@ -137,15 +219,6 @@ function createStarfield() {
 
   const starfield = new THREE.Points(geometry, material);
   scene.add(starfield);
-}
-
-function onWindowResize() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(width, height);
 }
 
 // ============================================================
@@ -197,12 +270,16 @@ async function loadGlbAssets() {
     loadOne(`${cleanBase}assets/satellite.glb`, 'S-2')
   ]);
 
+  const maxAnisotropy = renderer ? renderer.capabilities.getMaxAnisotropy() : 1;
+
   // 1. Earth
   if (earthGltf && earthGltf.scene) {
-    const maxAnisotropy = renderer ? renderer.capabilities.getMaxAnisotropy() : 1;
     earthGltf.scene.traverse((child) => {
       if (child.isMesh && child.material) {
+        child.renderOrder = 0;
         const mat = child.material;
+        mat.depthTest = true;
+        mat.depthWrite = true;
         if (mat.map) {
           mat.map.anisotropy = maxAnisotropy;
           mat.map.minFilter = THREE.LinearMipmapLinearFilter;
@@ -218,16 +295,26 @@ async function loadGlbAssets() {
     const mat = new THREE.MeshStandardMaterial({
       color: 0x1d4ed8,
       roughness: 0.7,
-      metalness: 0.1
+      metalness: 0.1,
+      depthTest: true,
+      depthWrite: true
     });
     earthMesh = new THREE.Mesh(geo, mat);
     earthMesh.name = 'Earth';
+    earthMesh.renderOrder = 0;
   }
   earthMesh.position.set(0, 0, 0);
   scene.add(earthMesh);
 
   // 2. Satellite 1 (S-1)
   if (sat1Gltf && sat1Gltf.scene) {
+    sat1Gltf.scene.traverse((child) => {
+      if (child.isMesh && child.material) {
+        child.renderOrder = 0;
+        child.material.depthTest = true;
+        child.material.depthWrite = true;
+      }
+    });
     sat1Obj = normalizeModel(sat1Gltf.scene, SATELLITE_SCALE * 2, 'S-1');
   } else {
     sat1Obj = createFallbackSatellite(0x38bdf8, 'S-1');
@@ -236,15 +323,23 @@ async function loadGlbAssets() {
 
   // 3. Satellite 2 (S-2)
   if (sat2Gltf && sat2Gltf.scene) {
+    sat2Gltf.scene.traverse((child) => {
+      if (child.isMesh && child.material) {
+        child.renderOrder = 0;
+        child.material.depthTest = true;
+        child.material.depthWrite = true;
+      }
+    });
     sat2Obj = normalizeModel(sat2Gltf.scene, SATELLITE_SCALE * 2, 'S-2');
   } else {
     sat2Obj = createFallbackSatellite(0xf59e0b, 'S-2');
   }
   scene.add(sat2Obj);
 
-  // Attach optical beacons
-  beacon1Mesh = attachBeacon(sat1Obj, 'S-1 Beacon');
-  beacon2Mesh = attachBeacon(sat2Obj, 'S-2 Beacon');
+  // Attach optical beacon sprites (additive, depth-tested so Earth occludes them)
+  const beaconTexture = createBeaconTexture();
+  beacon1Sprite = attachBeacon(sat1Obj, 'S-1 Beacon', beaconTexture);
+  beacon2Sprite = attachBeacon(sat2Obj, 'S-2 Beacon', beaconTexture);
 
   // Immediately initialize satellites at orbital coordinates
   if (orbit1 && sat1Obj) {
@@ -264,6 +359,7 @@ async function loadGlbAssets() {
 
   // Update visibility according to initial mount
   updateMountVisibility();
+  updateCameraTransform();
 
   // Hide loading overlay
   const overlay = document.getElementById('loading-overlay');
@@ -281,24 +377,39 @@ function createFallbackSatellite(colorHex, name) {
   group.name = name;
 
   const busGeo = new THREE.BoxGeometry(1.2, 0.8, 0.8);
-  const busMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.3 });
+  const busMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    metalness: 0.8,
+    roughness: 0.3,
+    depthTest: true,
+    depthWrite: true
+  });
   const busMesh = new THREE.Mesh(busGeo, busMat);
+  busMesh.renderOrder = 0;
   group.add(busMesh);
 
   const panelGeo = new THREE.BoxGeometry(2.4, 0.04, 0.7);
-  const panelMat = new THREE.MeshStandardMaterial({ color: colorHex, metalness: 0.9, roughness: 0.2 });
+  const panelMat = new THREE.MeshStandardMaterial({
+    color: colorHex,
+    metalness: 0.9,
+    roughness: 0.2,
+    depthTest: true,
+    depthWrite: true
+  });
   const panelL = new THREE.Mesh(panelGeo, panelMat);
   panelL.position.set(1.8, 0, 0);
+  panelL.renderOrder = 0;
   group.add(panelL);
 
   const panelR = new THREE.Mesh(panelGeo, panelMat);
   panelR.position.set(-1.8, 0, 0);
+  panelR.renderOrder = 0;
   group.add(panelR);
 
   return group;
 }
 
-function attachBeacon(satObj, name) {
+function attachBeacon(satObj, name, texture) {
   const beaconGroup = new THREE.Group();
   beaconGroup.name = name || 'OpticalBeacon';
 
@@ -306,14 +417,23 @@ function attachBeacon(satObj, name) {
   beaconLight.position.set(0, 0, 0);
   beaconGroup.add(beaconLight);
 
-  const beaconGeo = new THREE.SphereGeometry(0.04, 16, 16);
-  const beaconMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-  const beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
-  beaconMesh.position.set(0, 0, 0);
-  beaconGroup.add(beaconMesh);
+  // Additive glow sprite with depth testing against Earth and satellites
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    color: 0x38bdf8,
+    blending: THREE.AdditiveBlending,
+    depthTest: true,
+    depthWrite: false,
+    transparent: true
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.renderOrder = 10;
+  sprite.position.set(0, 0, 0);
+  sprite.scale.set(0.2, 0.2, 1.0);
+  beaconGroup.add(sprite);
 
   satObj.add(beaconGroup);
-  return beaconMesh;
+  return sprite;
 }
 
 function setupTrackingBeam() {
@@ -351,9 +471,77 @@ function checkLineOfSight(p1, p2, radius = EARTH_RADIUS) {
 }
 
 function updateMountVisibility() {
+  // Mount satellite must not appear in its own view
   const isS1Mount = mountSatId === 's1';
   if (sat1Obj) sat1Obj.visible = !isS1Mount;
   if (sat2Obj) sat2Obj.visible = isS1Mount;
+}
+
+// ============================================================
+// CAMERA POSITIONING & ORIENTATION (setAim)
+// ============================================================
+
+function setAimVectors(fx, fy, fz, ux, uy, uz) {
+  aimForward.set(Number(fx), Number(fy), Number(fz));
+  if (aimForward.lengthSq() < 1e-8) {
+    aimForward.set(1, 0, 0);
+  } else {
+    aimForward.normalize();
+  }
+
+  aimUp.set(Number(ux), Number(uy), Number(uz));
+  if (aimUp.lengthSq() < 1e-8) {
+    aimUp.set(0, 1, 0);
+  } else {
+    aimUp.normalize();
+  }
+
+  updateCameraTransform();
+}
+
+function updateCameraTransform() {
+  const mountObj = (mountSatId === 's1') ? sat1Obj : sat2Obj;
+  if (!mountObj || !camera) return;
+
+  // camera.position = mount satellite position + 0.45 x forward
+  camera.position.copy(mountObj.position).addScaledVector(aimForward, 0.45);
+
+  // Exact orientation given by (forward, up):
+  // In Three.js camera frame:
+  // - looking down camera local -Z axis: camZ = -forward
+  // - local +Y axis: orthoUp
+  // - local +X axis: right = forward x up
+  const right = new THREE.Vector3().crossVectors(aimForward, aimUp);
+  if (right.lengthSq() < 1e-8) {
+    right.set(0, 0, 1);
+  } else {
+    right.normalize();
+  }
+
+  const orthoUp = new THREE.Vector3().crossVectors(right, aimForward).normalize();
+  const camZ = aimForward.clone().negate();
+
+  const rotMat = new THREE.Matrix4().makeBasis(right, orthoUp, camZ);
+  camera.quaternion.setFromRotationMatrix(rotMat);
+  camera.updateMatrixWorld(true);
+}
+
+function updateBeaconSizes() {
+  // Ensure beacon glow sprite has at least ~6 px on-screen size at any distance
+  if (!camera) return;
+  const targetSprite = (mountSatId === 's1') ? beacon2Sprite : beacon1Sprite;
+  const targetObj = (mountSatId === 's1') ? sat2Obj : sat1Obj;
+
+  if (targetSprite && targetObj && camera) {
+    const dist = camera.position.distanceTo(targetObj.position);
+    const vh = Math.max(1, viewportHeight);
+    const fovVRad = THREE.MathUtils.degToRad(camera.fov);
+    // On-screen pixels P = (worldSize / (2 * dist * tan(fov_v / 2))) * vh
+    // To ensure P >= 7.0 px (at least ~6 px at any distance):
+    const minWorldSize = (7.5 / vh) * (2.0 * dist * Math.tan(fovVRad / 2.0));
+    const worldSize = Math.max(0.12, minWorldSize);
+    targetSprite.scale.set(worldSize, worldSize, 1.0);
+  }
 }
 
 // ============================================================
@@ -368,63 +556,45 @@ function animate(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
-  const effectiveDt = isPaused ? 0 : dt * simulationSpeed;
-  if (effectiveDt > 0) {
-    currentTime += effectiveDt;
-  }
-
-  // 1. Earth rotation
-  if (earthMesh && effectiveDt > 0) {
-    earthMesh.rotation.y += EARTH_ROTATION_SPEED * effectiveDt;
-  }
-
-  // 2. Update Satellites along Orbits
-  if (sat1Obj && orbit1 && effectiveDt > 0) {
-    orbit1.update(effectiveDt);
-    orbit1.getPosition(_position);
-    sat1Obj.position.copy(_position);
-    orbit1.getOrientation(_targetQuat);
-    sat1Obj.quaternion.copy(_targetQuat);
-  }
-
-  if (sat2Obj && orbit2 && effectiveDt > 0) {
-    orbit2.update(effectiveDt);
-    orbit2.getPosition(_position);
-    sat2Obj.position.copy(_position);
-    orbit2.getOrientation(_targetQuat);
-    sat2Obj.quaternion.copy(_targetQuat);
+  // External-clock mode: internal clock never advances.
+  // setTime(t) drives orbits and Earth rotation.
+  if (!externalClockMode) {
+    const effectiveDt = isPaused ? 0 : dt * simulationSpeed;
+    if (effectiveDt > 0) {
+      currentTime += effectiveDt;
+      if (earthMesh) {
+        earthMesh.rotation.y += EARTH_ROTATION_SPEED * effectiveDt;
+      }
+      if (sat1Obj && orbit1) {
+        orbit1.update(effectiveDt);
+        orbit1.getPosition(_position);
+        sat1Obj.position.copy(_position);
+        orbit1.getOrientation(_targetQuat);
+        sat1Obj.quaternion.copy(_targetQuat);
+      }
+      if (sat2Obj && orbit2) {
+        orbit2.update(effectiveDt);
+        orbit2.getPosition(_position);
+        sat2Obj.position.copy(_position);
+        orbit2.getOrientation(_targetQuat);
+        sat2Obj.quaternion.copy(_targetQuat);
+      }
+    }
   }
 
   if (sat1Obj) sat1Obj.updateMatrixWorld(true);
   if (sat2Obj) sat2Obj.updateMatrixWorld(true);
 
-  // 3. Update Camera Position & Orientation (First-Person Mounted Gimbal)
-  const mountObj = (mountSatId === 's1') ? sat1Obj : sat2Obj;
-  const targetObj = (mountSatId === 's1') ? sat2Obj : sat1Obj;
+  // Update camera mount position and orientation
+  updateCameraTransform();
 
-  if (mountObj) {
-    camera.position.copy(mountObj.position);
+  // Dynamic beacon sprite size scaling (>= 6 px at any distance)
+  updateBeaconSizes();
 
-    // Aim point based on active focus mode:
-    // EARTH mode continuously locks on Earth center (0, 0, 0).
-    // AUTO/TARGET mode continuously locks on opposing satellite.
-    const aimPoint = (focusMode === 'EARTH')
-      ? new THREE.Vector3(0, 0, 0)
-      : (targetObj ? targetObj.position : new THREE.Vector3(0, 0, 0));
-
-    camera.lookAt(aimPoint);
-
-    // Apply real gimbal pan and tilt offsets relative to this boresight
-    if (currentPanDeg !== 0 || currentTiltDeg !== 0) {
-      camera.rotateY(-THREE.MathUtils.degToRad(currentPanDeg));
-      camera.rotateX(THREE.MathUtils.degToRad(currentTiltDeg));
-    }
-  }
-
-  // 4. Update Optical Tracking Beam
-  if (beacon1Mesh && beacon2Mesh) {
-    beacon1Mesh.getWorldPosition(_s1BeaconPos);
-    beacon2Mesh.getWorldPosition(_s2BeaconPos);
+  // Update Optical Tracking Beam and Line-of-Sight
+  if (sat1Obj && sat2Obj) {
+    sat1Obj.getWorldPosition(_s1BeaconPos);
+    sat2Obj.getWorldPosition(_s2BeaconPos);
     hasLineOfSight = checkLineOfSight(_s1BeaconPos, _s2BeaconPos, EARTH_RADIUS);
 
     if (trackingBeam && trackingBeamGeo) {
@@ -445,47 +615,41 @@ function animate(now) {
     }
   }
 
-  // 5. Render Gimbal View
+  // Render 4:3 letterboxed view:
+  // Clear full window canvas, then scissor test to 4:3 viewport
+  renderer.setScissorTest(false);
+  renderer.setClearColor(0x020408, 1.0);
+  renderer.clear();
+
+  renderer.setScissorTest(true);
+  renderer.setViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+  renderer.setScissor(viewportX, viewportY, viewportWidth, viewportHeight);
   renderer.render(scene, camera);
 }
 
 // ============================================================
-// PYTHON ↔ GIMBAL CAM JAVASCRIPT BRIDGE
+// PYTHON <-> GIMBAL CAM JAVASCRIPT BRIDGE
 // ============================================================
 
 window.gimbalcam = {
   isReady: () => isReady,
 
-  setPose: (panDeg, tiltDeg) => {
-    currentPanDeg = Number(panDeg);
-    currentTiltDeg = Number(tiltDeg);
-    hasCustomPose = true;
+  setAim: (fx, fy, fz, ux, uy, uz) => {
+    setAimVectors(fx, fy, fz, ux, uy, uz);
   },
 
-  setFocusMode: (mode) => {
-    const m = String(mode).toUpperCase();
-    if (m === 'EARTH' || m === 'EARTH_BORESIGHT') {
-      focusMode = 'EARTH';
-    } else {
-      focusMode = 'TARGET';
-    }
+  setExternalClock: (enabled) => {
+    externalClockMode = Boolean(enabled);
   },
 
-  setMode: (mode) => {
-    const m = String(mode).toUpperCase();
-    if (m === 'EARTH' || m === 'EARTH_BORESIGHT') {
-      focusMode = 'EARTH';
-    } else {
-      focusMode = 'TARGET';
-    }
-  },
-
-  setFov: (fovDeg) => {
-    const fov = Number(fovDeg);
+  setFov: (fovHDeg) => {
+    const fov = Number(fovHDeg);
     if (fov > 0 && fov < 180) {
-      currentFovDeg = fov;
+      currentFovHDeg = fov;
+      computeVerticalFov();
       if (camera) {
-        camera.fov = fov;
+        camera.fov = currentFovVDeg;
+        camera.aspect = 4 / 3;
         camera.updateProjectionMatrix();
       }
     }
@@ -495,6 +659,7 @@ window.gimbalcam = {
     const id = String(satId).toLowerCase().replace('-', '');
     mountSatId = (id === 's2' || id === 'sat2' || id === '2') ? 's2' : 's1';
     updateMountVisibility();
+    updateCameraTransform();
   },
 
   setPaused: (paused) => {
@@ -540,6 +705,7 @@ window.gimbalcam = {
     }
     if (sat1Obj) sat1Obj.updateMatrixWorld(true);
     if (sat2Obj) sat2Obj.updateMatrixWorld(true);
+    updateCameraTransform();
   },
 
   captureDataUrl: () => {
@@ -553,13 +719,14 @@ window.gimbalcam = {
     return {
       ready: isReady,
       mount: mountSatId,
-      focusMode: focusMode,
       paused: isPaused,
-      pan: currentPanDeg,
-      tilt: currentTiltDeg,
-      fov: currentFovDeg,
+      externalClock: externalClockMode,
+      fovH: currentFovHDeg,
+      fovV: currentFovVDeg,
       lineOfSight: hasLineOfSight,
       currentTime: currentTime,
+      aimForward: { x: aimForward.x, y: aimForward.y, z: aimForward.z },
+      aimUp: { x: aimUp.x, y: aimUp.y, z: aimUp.z },
       satellite1: s1Pos,
       satellite2: s2Pos
     };

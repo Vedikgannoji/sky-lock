@@ -79,6 +79,11 @@ class Session:
         if hasattr(self.controller, "set_manual_rate"):
             self.controller.set_manual_rate(pan_rate, tilt_rate)
 
+    def set_gimbal_pointing(self, pan_deg: float, tilt_deg: float) -> None:
+        """Command absolute gimbal pointing angles (in observer frame)."""
+        if hasattr(self.source, "gimbal") and hasattr(self.source.gimbal, "set_pointing"):
+            self.source.gimbal.set_pointing(pan_deg, tilt_deg)
+
     @property
     def latency_frames(self) -> int:
         """Configured control delay in frames."""

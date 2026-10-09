@@ -24,6 +24,7 @@ let simulationSpeed = 1.0;
 let isReady = false;
 let hasLineOfSight = false;
 let focusTarget = null; // null for Earth, or satellite Object3D
+let externalClockMode = true; // external clock mode: setTime(t) drives orbits; internal clock never advances
 
 // Visualization toggles
 let showOrbitLines = true;
@@ -418,35 +419,37 @@ function animate(now) {
     lastFpsTime = now;
   }
 
-  const effectiveDt = isPaused ? 0 : dt * simulationSpeed;
+  if (!externalClockMode) {
+    const effectiveDt = isPaused ? 0 : dt * simulationSpeed;
 
-  // 1. Earth rotation
-  if (earthMesh && effectiveDt > 0) {
-    earthMesh.rotation.y += EARTH_ROTATION_SPEED * effectiveDt;
+    // 1. Earth rotation
+    if (earthMesh && effectiveDt > 0) {
+      earthMesh.rotation.y += EARTH_ROTATION_SPEED * effectiveDt;
+    }
+
+    // 2. Update Satellites along Orbits
+    if (sat1Obj && orbit1 && effectiveDt > 0) {
+      orbit1.update(effectiveDt);
+      orbit1.getPosition(_position);
+      sat1Obj.position.copy(_position);
+      orbit1.getOrientation(_targetQuat);
+      sat1Obj.quaternion.copy(_targetQuat);
+    }
+
+    if (sat2Obj && orbit2 && effectiveDt > 0) {
+      orbit2.update(effectiveDt);
+      orbit2.getPosition(_position);
+      sat2Obj.position.copy(_position);
+      orbit2.getOrientation(_targetQuat);
+      sat2Obj.quaternion.copy(_targetQuat);
+    }
+
+    if (sat1Obj) sat1Obj.updateMatrixWorld(true);
+    if (sat2Obj) sat2Obj.updateMatrixWorld(true);
+
+    // 3. Continuous per-frame LOS check & laser beam update
+    updateTrackingState();
   }
-
-  // 2. Update Satellites along Orbits
-  if (sat1Obj && orbit1 && effectiveDt > 0) {
-    orbit1.update(effectiveDt);
-    orbit1.getPosition(_position);
-    sat1Obj.position.copy(_position);
-    orbit1.getOrientation(_targetQuat);
-    sat1Obj.quaternion.copy(_targetQuat);
-  }
-
-  if (sat2Obj && orbit2 && effectiveDt > 0) {
-    orbit2.update(effectiveDt);
-    orbit2.getPosition(_position);
-    sat2Obj.position.copy(_position);
-    orbit2.getOrientation(_targetQuat);
-    sat2Obj.quaternion.copy(_targetQuat);
-  }
-
-  if (sat1Obj) sat1Obj.updateMatrixWorld(true);
-  if (sat2Obj) sat2Obj.updateMatrixWorld(true);
-
-  // 3. Continuous per-frame LOS check & laser beam update
-  updateTrackingState();
 
   // 4. Update OrbitControls & Focus
   if (focusTarget) {
@@ -551,6 +554,10 @@ window.skylock3d = {
     isPaused = Boolean(paused);
   },
 
+  setExternalClock: (enabled) => {
+    externalClockMode = Boolean(enabled);
+  },
+
   setTime: (timeSec) => {
     const t = Number(timeSec);
     if (orbit1 && sat1Obj) {
@@ -566,6 +573,9 @@ window.skylock3d = {
       sat2Obj.position.copy(_position);
       orbit2.getOrientation(_targetQuat);
       sat2Obj.quaternion.copy(_targetQuat);
+    }
+    if (earthMesh) {
+      earthMesh.rotation.y = EARTH_ROTATION_SPEED * t;
     }
     if (sat1Obj) sat1Obj.updateMatrixWorld(true);
     if (sat2Obj) sat2Obj.updateMatrixWorld(true);
@@ -585,6 +595,7 @@ window.skylock3d = {
       beamActive: hasLineOfSight && showTrackingBeam,
       fps: currentFps,
       paused: isPaused,
+      externalClock: externalClockMode,
       speed: simulationSpeed,
       satellite1: s1Pos,
       satellite2: s2Pos

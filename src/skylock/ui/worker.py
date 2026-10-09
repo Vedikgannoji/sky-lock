@@ -224,6 +224,11 @@ class SessionWorker(QObject):
             self._timer.stop()
         self._is_running = False
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the worker simulation loop is currently active."""
+        return self._is_running
+
     def _build_new_session(self, cfg: SkyLockConfig) -> bool:
         """Rebuild tracking sessions from a new configuration."""
         try:
@@ -410,6 +415,12 @@ class SessionWorker(QObject):
                 self._manual_tilt_rate = tilt_rate
             if self._session_s2 is not None:
                 self._session_s2.set_manual_rates(pan_rate, tilt_rate)
+
+    def set_gimbal_pointing(self, sat_id: str, pan_deg: float, tilt_deg: float) -> None:
+        """Command absolute gimbal pointing angles on the specified session."""
+        session = self.get_session(sat_id)
+        if session is not None and hasattr(session, "set_gimbal_pointing"):
+            session.set_gimbal_pointing(pan_deg, tilt_deg)
 
     @Slot()
     def ack_frame(self) -> None:

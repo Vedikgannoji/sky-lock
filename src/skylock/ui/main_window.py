@@ -67,15 +67,16 @@ class ManualSteeringFilter(QObject):
     """
 
     rate_changed = Signal(float, float)  # (pan_rate, tilt_rate)
+    is_manual_mode: bool = False
 
     def __init__(
         self,
         parent: QObject | None = None,
         manual_rate_deg_s: float = 2.0,
     ) -> None:
+        self.is_manual_mode = False
         super().__init__(parent)
         self.manual_rate_deg_s = manual_rate_deg_s
-        self.is_manual_mode = False
         self._pressed_keys: set[int] = set()
 
         # Key mappings
@@ -106,7 +107,7 @@ class ManualSteeringFilter(QObject):
 
     def eventFilter(self, watched: QObject | None, event: QEvent | None) -> bool:
         """Filter key events for manual steering."""
-        if event is None or not self.is_manual_mode:
+        if event is None or not getattr(self, "is_manual_mode", False):
             return False
 
         event_type = event.type()
@@ -544,7 +545,7 @@ class MainWindow(QMainWindow):
         # Worker -> Views
         self.camera_view.set_worker(self._worker, self._steering_filter)
         self._worker.frame_ready.connect(self.camera_view.update_frame)
-        self._worker.frame_ready.connect(self.telemetry_panel.update_telemetry)
+        self._worker.frame_ready.connect(self._on_telemetry_frame)
         self._worker.frame_ready.connect(self._on_frame_ready)
         self._worker.session_error.connect(self._on_session_error)
         self._worker.running_changed.connect(self._on_running_changed)
@@ -586,6 +587,11 @@ class MainWindow(QMainWindow):
         self.space_view_3d.scene_ready.connect(self._push_orbits_to_views)
         self.camera_view.gimbal_cam.scene_ready.connect(self._push_orbits_to_views)
 
+    def _on_telemetry_frame(self, fv: Any) -> None:  # noqa: ANN401
+        """Forward frame to telemetry panel only if worker is active."""
+        if self._worker.is_running:
+            self.telemetry_panel.update_telemetry(fv)
+
     def _on_frame_ready(self, fv: Any) -> None:  # noqa: ANN401
         """Update timeline, status bar, and 3D simulation with latest state."""
         if hasattr(fv, "state_history_tail"):
@@ -599,17 +605,28 @@ class MainWindow(QMainWindow):
         if hasattr(fv, "input_kind"):
             self.lbl_status_source.setText(fv.input_kind)
 
-        # Forward gimbal angles to 3D Space View
+        # Synchronize simulation time to 3D Space View from shared clock
+        t_sim = get_shared_clock().now()
+        if hasattr(self, "space_view_3d"):
+            self.space_view_3d.set_time(t_sim)
+
+        # Forward actual gimbal pointing to right-panel display & telemetry & 3D Space View
         if (
-            hasattr(self, "space_view_3d")
-            and hasattr(fv, "pointing_pan_deg")
+            hasattr(fv, "pointing_pan_deg")
             and hasattr(fv, "pointing_tilt_deg")
             and fv.pointing_pan_deg is not None
             and fv.pointing_tilt_deg is not None
         ):
             self._current_pan = float(fv.pointing_pan_deg)
             self._current_tilt = float(fv.pointing_tilt_deg)
-            self.space_view_3d.set_gimbal_pose(self._current_pan, self._current_tilt)
+            if hasattr(self, "space_view_3d"):
+                self.space_view_3d.set_gimbal_pose(self._current_pan, self._current_tilt)
+            if hasattr(self, "gimbal_control_panel"):
+                self.gimbal_control_panel.set_values(
+                    self._current_pan, self._current_tilt, emit_signals=False
+                )
+            if hasattr(self, "telemetry_panel"):
+                self.telemetry_panel.update_gimbal(self._current_pan, self._current_tilt)
 
         # If camera_view is not the current active tab (e.g. 3D Space Simulation is active),
         # acknowledge the frame directly because camera_view.paintEvent will not trigger.
@@ -617,16 +634,14 @@ class MainWindow(QMainWindow):
             self._worker.ack_frame()
 
     def _on_gimbal_manual_pan(self, pan: float) -> None:
+        sel_sat = self.camera_view.selected_satellite
         self._current_pan = float(pan)
-        self.space_view_3d.set_gimbal_pose(self._current_pan, self._current_tilt)
-        self.camera_view.gimbal_cam.set_pose(self._current_pan, self._current_tilt)
-        self.telemetry_panel.update_gimbal(self._current_pan, self._current_tilt)
+        self._worker.set_gimbal_pointing(sel_sat, self._current_pan, self._current_tilt)
 
     def _on_gimbal_manual_tilt(self, tilt: float) -> None:
+        sel_sat = self.camera_view.selected_satellite
         self._current_tilt = float(tilt)
-        self.space_view_3d.set_gimbal_pose(self._current_pan, self._current_tilt)
-        self.camera_view.gimbal_cam.set_pose(self._current_pan, self._current_tilt)
-        self.telemetry_panel.update_gimbal(self._current_pan, self._current_tilt)
+        self._worker.set_gimbal_pointing(sel_sat, self._current_pan, self._current_tilt)
 
     def _on_gimbal_manual_fov(self, fov: float) -> None:
         self._current_fov = float(fov)
@@ -634,16 +649,22 @@ class MainWindow(QMainWindow):
         self.camera_view.set_fov(self._current_fov)
 
     def _on_gimbal_reset(self) -> None:
+        sel_sat = self.camera_view.selected_satellite
         self._current_pan = 0.0
         self._current_tilt = 0.0
-        self._current_fov = 20.0
-        self.gimbal_control_panel.set_values(0.0, 0.0, 20.0, emit_signals=False)
+        self._current_fov = 16.0
+        self._worker.set_gimbal_pointing(sel_sat, 0.0, 0.0)
+        self.gimbal_control_panel.set_values(0.0, 0.0, 16.0, emit_signals=False)
         self.space_view_3d.reset_camera()
+        self.camera_view.set_fov(16.0)
         self.camera_view.gimbal_cam.reset_pose()
         self.telemetry_panel.update_gimbal(0.0, 0.0)
 
     def _on_gimbal_track_target(self) -> None:
+        sel_sat = self.camera_view.selected_satellite
         self._is_auto_tracking = True
+        self._worker.set_mode(sel_sat, "AUTO")
+        self.camera_view.sync_mode_from_external("AUTO")
         self.controls_panel.cmb_mode.setCurrentText("AUTO")
 
     def _on_orbits_changed(self, data: dict[str, Any]) -> None:
