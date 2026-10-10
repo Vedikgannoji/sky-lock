@@ -86,22 +86,27 @@ class _BenchWorker(QObject):
                 record = self.runner.run(sc, seed=seed)
                 self.record_ready.emit(record)
             except Exception as e:
+                import platform
+                import sys
+                import cv2
+                import numpy as np
+                import skylock
                 rec = RunRecord(
                     run_id="error",
                     scenario_id=sc.id,
                     seed=seed,
-                    software_version="0.1.0",
-                    python_version="",
-                    numpy_version="",
-                    opencv_version="",
-                    platform_info="",
+                    software_version=skylock.__version__,
+                    python_version=sys.version,
+                    numpy_version=np.__version__,
+                    opencv_version=cv2.__version__,
+                    platform_info=platform.platform(),
                     config_snapshot={},
                     config_hash="",
                     input_source=sc.input_kind,
                     duration_s=sc.duration_s,
                     frames=0,
                     metrics={},
-                    verdicts={},
+                    verdicts={"overall": "FAIL"},
                     overall_verdict="FAIL",
                     started_at_utc="",
                     wall_time_s=0.0,
@@ -264,6 +269,18 @@ class BenchmarkPanel(QWidget):
         self.scenarios_list = list(builtin_scenarios())
         for sc in self.scenarios_list:
             self.cmb_scenarios.addItem(sc.id, sc)
+        self.cmb_scenarios.currentIndexChanged.connect(self._on_scenario_changed)
+        if self.scenarios_list:
+            self._on_scenario_changed(0)
+
+    def _on_scenario_changed(self, index: int) -> None:
+        sc = self.cmb_scenarios.currentData()
+        if sc is not None:
+            self.cmb_scenarios.setToolTip(
+                f"{sc.id}\nDuration: {sc.duration_s}s\nTags: {', '.join(sc.tags)}\n\n{sc.description}"
+            )
+            if self._worker_thread is None or not self._worker_thread.isRunning():
+                self.lbl_status.setText(f"Ready: {sc.id} ({sc.duration_s:.1f}s)")
 
     def _on_toggle_link_seed(self, checked: bool) -> None:
         self.spn_seed.setReadOnly(checked)
@@ -308,6 +325,7 @@ class BenchmarkPanel(QWidget):
         if self._worker_thread is not None and self._worker_thread.isRunning():
             return
 
+        self._was_cancelled = False
         tasks: list[tuple[Scenario, int]] = []
         skipped_s16 = False
 
@@ -350,6 +368,7 @@ class BenchmarkPanel(QWidget):
 
     def _cancel_benchmark(self) -> None:
         if self._worker is not None:
+            self._was_cancelled = True
             self._worker.cancel()
             self.lbl_status.setText("Cancelling after current run...")
             self.btn_cancel.setEnabled(False)
@@ -364,7 +383,10 @@ class BenchmarkPanel(QWidget):
         self.btn_run_all.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.progress_bar.setVisible(False)
-        self.lbl_status.setText(f"Completed {len(self._records)} benchmark run(s)")
+        if getattr(self, "_was_cancelled", False):
+            self.lbl_status.setText(f"Cancelled after {len(self._records)} run(s)")
+        else:
+            self.lbl_status.setText(f"Completed {len(self._records)} benchmark run(s)")
         self._update_summary_label()
 
         if self._worker is not None:
@@ -373,6 +395,10 @@ class BenchmarkPanel(QWidget):
         if self._worker_thread is not None:
             self._worker_thread.deleteLater()
             self._worker_thread = None
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     def shutdown(self) -> None:
         """Cancel and safely wait for benchmark worker thread to terminate."""
@@ -488,11 +514,13 @@ class BenchmarkPanel(QWidget):
         for r in self._records:
             v = r.overall_verdict
             counts[v] = counts.get(v, 0) + 1
+        not_run_str = f" | NOT_RUN: {counts['NOT_RUN']}" if counts.get("NOT_RUN", 0) > 0 else ""
         self.lbl_summary.setText(
             f"{len(self._records)} runs | "
             f"PASS: {counts.get('PASS', 0)} | "
             f"FAIL: {counts.get('FAIL', 0)} | "
             f"INDET: {counts.get('INDETERMINATE', 0)}"
+            f"{not_run_str}"
         )
 
     def _on_table_double_clicked(self, item: QTableWidgetItem) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import functools
 import http.server
 import logging
@@ -144,3 +145,14 @@ class Embedded3DServer:
                 return True
         except OSError:
             return False
+
+
+def _cleanup_shared_server() -> None:
+    if Embedded3DServer._shared_instance is not None:
+        try:
+            Embedded3DServer._shared_instance.stop()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_shared_server)

@@ -52,6 +52,8 @@ class Scenario:
         if self.input_kind == "mp4" and self.mp4_path is not None:
             combined["input.kind"] = "mp4"
             combined["input.mp4_path"] = self.mp4_path
+        elif self.input_kind == "orbital":
+            combined["input.kind"] = "orbital"
         elif self.input_kind == "simulation":
             combined["input.kind"] = "simulation"
         return override(base_cfg, combined)

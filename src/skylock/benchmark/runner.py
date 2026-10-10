@@ -115,13 +115,44 @@ class BenchmarkRunner:
         Returns:
             Complete RunRecord with metrics, verdicts, and provenance.
         """
-        if scenario.input_kind == "mp4" and not scenario.mp4_path:
-            return _not_run_record(scenario, seed, "No MP4 path provided")
+        if scenario.input_kind == "mp4":
+            if not scenario.mp4_path:
+                return _not_run_record(scenario, seed, "No MP4 path provided")
+            mp4_file = Path(scenario.mp4_path)
+            if not mp4_file.exists() or not mp4_file.is_file():
+                return _not_run_record(scenario, seed, f"MP4 file not found: {scenario.mp4_path}")
 
         if isolate:
             return _run_isolated(self.base_config, scenario, seed)
 
-        return _run_in_process(self.base_config, scenario, seed, output_dir)
+        try:
+            return _run_in_process(self.base_config, scenario, seed, output_dir)
+        except Exception as e:
+            prov = _provenance()
+            is_src_err = "SourceError" in type(e).__name__ or "not found" in str(e).lower()
+            return RunRecord(
+                run_id=str(uuid.uuid4()),
+                scenario_id=scenario.id,
+                seed=seed,
+                software_version=prov["software_version"],
+                python_version=prov["python_version"],
+                numpy_version=prov["numpy_version"],
+                opencv_version=prov["opencv_version"],
+                platform_info=prov["platform_info"],
+                config_snapshot={},
+                config_hash="",
+                input_source=scenario.input_kind,
+                duration_s=scenario.duration_s,
+                frames=0,
+                metrics={},
+                verdicts={"overall": "NOT_RUN" if is_src_err else "FAIL"},
+                overall_verdict="NOT_RUN" if is_src_err else "FAIL",
+                started_at_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                wall_time_s=0.0,
+                git_commit=_get_git_commit(),
+                status="NOT_RUN" if is_src_err else "FAILED",
+                error=str(e),
+            )
 
 
 def _get_git_commit() -> str | None:

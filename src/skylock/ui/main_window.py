@@ -39,6 +39,7 @@ from skylock.core.los import (
 from skylock.core.orbital_world import ORBIT_SPEED_SCALE
 from skylock.core.sim_clock import get_shared_clock
 from skylock.ui import theme
+from skylock.benchmark.runner import BenchmarkRunner
 from skylock.ui.config_editor import ConfigEditor
 from skylock.ui.panels.benchmark import BenchmarkPanel
 from skylock.ui.panels.configuration_view import ConfigurationView
@@ -292,7 +293,8 @@ class MainWindow(QMainWindow):
 
         # Bottom section: Tabs for Benchmark and other future panels
         self.tab_widget = QTabWidget()
-        self.bench_panel = BenchmarkPanel()
+        self.bench_panel = BenchmarkPanel(runner=BenchmarkRunner(self.editor.config))
+        self.bench_panel._mp4_path = self.editor.config.input.mp4_path
         self.tab_widget.addTab(self.bench_panel, "Benchmark")
 
         central_splitter.addWidget(self.tab_widget)
@@ -542,6 +544,7 @@ class MainWindow(QMainWindow):
         self.controls_panel.reset_clicked.connect(self._worker.reset_session)
         self.controls_panel.reset_clicked.connect(self._on_reset_ui)
         self.controls_panel.config_changed.connect(self._worker.apply_config)
+        self.controls_panel.config_changed.connect(self._on_controls_config_changed)
         self.controls_panel.mode_changed.connect(self._on_mode_changed)
 
         # Worker -> Views
@@ -740,6 +743,12 @@ class MainWindow(QMainWindow):
         self._steering_filter.set_manual_mode(mode == "MANUAL")
         self._is_auto_tracking = (mode == "AUTO")
         self.camera_view.sync_mode_from_external(mode)
+
+    def _on_controls_config_changed(self, cfg: SkyLockConfig) -> None:
+        """Sync updated configuration to the benchmark runner and internal state."""
+        if hasattr(self, "bench_panel") and self.bench_panel is not None:
+            self.bench_panel.runner.base_config = cfg
+            self.bench_panel._mp4_path = cfg.input.mp4_path
 
     def _on_toggle_gt(self, checked: bool) -> None:
         self.camera_view.show_ground_truth = checked

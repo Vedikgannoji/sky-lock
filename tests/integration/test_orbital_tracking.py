@@ -20,7 +20,7 @@ import subprocess
 import numpy as np
 
 from skylock.app.factory import build_session
-from skylock.config.models import InputConfig, SkyLockConfig
+from skylock.config.models import GimbalConfig, InputConfig, SkyLockConfig
 from skylock.core.enums import TrackState
 from skylock.core.geometry import angular_diff_deg
 from skylock.core.los import orbit_position_at_time
@@ -132,7 +132,10 @@ def test_orbital_tracking_300s_headless_simulation() -> None:
     total_sim_time = 300.0  # seconds
     total_frames = int(total_sim_time * fps)
 
-    cfg = SkyLockConfig(input=InputConfig(kind="orbital"))
+    cfg = SkyLockConfig(
+        input=InputConfig(kind="orbital"),
+        gimbal=GimbalConfig(slew_rate_deg_s=10.0, max_slew_rate_deg_s=10.0),
+    )
     clock = SimClock()
 
     sess = build_session(cfg, sat_id="s1")

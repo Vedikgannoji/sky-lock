@@ -206,7 +206,14 @@ class Tracker:
             )
             return (TrackState.LOST, None, None, intent)
 
+        was_blocked = self.blocked
         self.blocked = False
+        if was_blocked:
+            self.kalman.reset()
+            self.candidate_tracker.reset()
+            self.state_machine.reset(t)
+            self._cue_aligned = False
+            self._cue_scan_configured = False
 
         prev_state = self.state_machine.state
 

@@ -318,16 +318,16 @@ class CameraFeedView(QWidget):
         )
         hdr_layout.addWidget(self.lbl_handshake_indicator)
 
-        btn_clear = QPushButton("Clear", header_bar)
-        btn_clear.setToolTip("Clear status log history")
-        btn_clear.setStyleSheet(
+        self.btn_clear = QPushButton("Clear", header_bar)
+        self.btn_clear.setToolTip("Clear status log history")
+        self.btn_clear.setStyleSheet(
             f"QPushButton {{ background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 3px; padding: 2px 8px; "
             f"font-size: 10px; font-weight: 600; }}"
             f"QPushButton:hover {{ background-color: {theme.BTN_HOVER_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; }}"
         )
-        btn_clear.clicked.connect(self.clear_log)
-        hdr_layout.addWidget(btn_clear)
+        self.btn_clear.clicked.connect(self.clear_log)
+        hdr_layout.addWidget(self.btn_clear)
 
         sec2_layout.addWidget(header_bar)
 

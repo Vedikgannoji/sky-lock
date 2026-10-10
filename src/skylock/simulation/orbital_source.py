@@ -189,6 +189,7 @@ class OrbitalSource(FrameSource):
         # Build live gimbal with live limits (pan +-180 wrap, tilt +-90, max slew 10 deg/s)
         if gimbal is not None:
             self.gimbal = gimbal
+        else:
             slew_rate = min(10.0, max(0.1, float(config.gimbal.slew_rate_deg_s)))
             live_gimbal_cfg = GimbalConfig(
                 slew_rate_deg_s=slew_rate,
