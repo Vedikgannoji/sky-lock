@@ -151,8 +151,16 @@ class SpaceView3D(QWidget):
             self.set_external_clock(True)
             self.set_gimbal_pose(self._last_pan, self._last_tilt)
             self.set_camera_fov(self._last_fov)
+            # Force-remove loading overlay from Python side as safety measure
+            self._web_view.page().runJavaScript(
+                "var ov=document.getElementById('loading-overlay');"
+                "if(ov){ov.style.opacity='0';setTimeout(function(){ov.remove();},400);}"
+            )
         else:
             logger.warning("SpaceView3D failed to load WebGL scene")
+            # Still mark ready so the app doesn't hang
+            self._is_ready = True
+            self.scene_ready.emit()
 
     def set_time(self, time_sec: float) -> None:
         """Synchronize the 3D orbital simulation time directly from the shared clock."""

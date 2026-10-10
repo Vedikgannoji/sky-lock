@@ -268,6 +268,9 @@ class MainWindow(QMainWindow):
         self.view_tabs.addTab(self.space_view_3d, "3D Space Simulation")
         self.view_tabs.addTab(self.camera_view, "Camera Sensor Feed")
         self.view_tabs.addTab(self.configuration_view, "Configuration")
+        # 4th tab: Connection Feed (event log with link/handshake badges)
+        self.connection_feed_widget = self.camera_view.create_connection_feed_widget(self.view_tabs)
+        self.view_tabs.addTab(self.connection_feed_widget, "Connection Feed")
         top_layout.addWidget(self.view_tabs, stretch=10)
 
         # State timeline mounted under camera view (hidden by default per Phase 2 Rule 5)

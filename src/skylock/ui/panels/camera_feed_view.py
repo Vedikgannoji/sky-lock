@@ -3,6 +3,9 @@
 Combines Section 1 (Observer-switchable sensor imagery with Earth/AUTO/MANUAL focus controls,
 and CAMERA (3D) | SENSOR (mono) view toggle) and Section 2 (Real-time communications, lock
 transitions, LOS occlusion, and handshake event log driven by the shared simulation clock).
+
+The event log is exposed via ``create_connection_feed_widget()`` so MainWindow can place it
+in a separate tab.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSplitter,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -57,34 +59,32 @@ class CameraFeedView(QWidget):
         self._prev_los_blocked: bool | None = None
         self._log_history: deque[str] = deque(maxlen=100)
 
+        # Connection feed widget (created eagerly for test compatibility)
+        self._connection_feed: QWidget | None = None
+        self._log_text: QTextEdit | None = None
+        self._lbl_link_indicator: QLabel | None = None
+        self._lbl_handshake_indicator: QLabel | None = None
+
         self._build_ui()
+        # Eagerly create the connection feed so attributes are accessible
+        self.create_connection_feed_widget()
 
     def _build_ui(self) -> None:
-        main_layout = QHBoxLayout(self)
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(4)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        splitter.setChildrenCollapsible(False)
-        main_layout.addWidget(splitter)
-
         # --------------------------------------------------------------------
-        # SECTION 1: Camera Feed + Controls
+        # CONTROL BAR — Top toolbar
         # --------------------------------------------------------------------
-        section1_widget = QWidget(splitter)
-        sec1_layout = QVBoxLayout(section1_widget)
-        sec1_layout.setContentsMargins(2, 2, 2, 2)
-        sec1_layout.setSpacing(4)
-
-        # Control Bar
-        control_bar = QFrame(section1_widget)
+        control_bar = QFrame(self)
         control_bar.setStyleSheet(
             f"QFrame {{ background-color: {theme.BASE_BG.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 2px; }}"
         )
         bar_layout = QHBoxLayout(control_bar)
-        bar_layout.setContentsMargins(6, 4, 6, 4)
-        bar_layout.setSpacing(8)
+        bar_layout.setContentsMargins(6, 3, 6, 3)
+        bar_layout.setSpacing(6)
 
         # Observer selector
         lbl_obs = QLabel("OBSERVER:", control_bar)
@@ -97,9 +97,10 @@ class CameraFeedView(QWidget):
         self.combo_observer.addItem("View S-2 from S-1", "s1")
         self.combo_observer.addItem("View S-1 from S-2", "s2")
         self.combo_observer.setToolTip("Select which satellite camera feeds this view")
+        self.combo_observer.setMinimumWidth(130)
         self.combo_observer.setStyleSheet(
             f"QComboBox {{ background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; "
-            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 4px 8px; "
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 3px 6px; "
             f"font-weight: 600; font-size: 11px; }}"
             f"QComboBox:hover {{ border-color: {theme.HIGHLIGHT_BG.name()}; }}"
             f"QComboBox QAbstractItemView {{ background-color: {theme.BASE_BG.name()}; "
@@ -113,7 +114,7 @@ class CameraFeedView(QWidget):
         self.lbl_id_badge.setToolTip("Active host camera platform and target satellite")
         self.lbl_id_badge.setStyleSheet(
             f"background-color: {theme.ALT_BASE_BG.name()}; color: {theme.HIGHLIGHT_BG.name()}; "
-            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 3px 8px; "
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 2px 6px; "
             f"font-weight: 700; font-size: 11px; font-family: Consolas;"
         )
         bar_layout.addWidget(self.lbl_id_badge)
@@ -136,8 +137,8 @@ class CameraFeedView(QWidget):
 
         btn_style = (
             f"QPushButton {{ background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
-            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 4px 10px; "
-            f"font-weight: 600; font-size: 11px; }}"
+            f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 3px 8px; "
+            f"font-weight: 600; font-size: 11px; min-width: 50px; }}"
             f"QPushButton:hover {{ background-color: {theme.BTN_HOVER_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; }}"
             f"QPushButton:checked {{ background-color: {theme.HIGHLIGHT_BG.name()}; color: {theme.COLOR_WHITE.name()}; "
             f"border-color: {theme.BTN_BORDER_ACTIVE.name()}; }}"
@@ -185,7 +186,7 @@ class CameraFeedView(QWidget):
         self.view_toggle_group = QButtonGroup(control_bar)
         self.view_toggle_group.setExclusive(True)
 
-        self.btn_view_camera = QPushButton("CAMERA (3D)", control_bar)
+        self.btn_view_camera = QPushButton("3D", control_bar)
         self.btn_view_camera.setCheckable(True)
         self.btn_view_camera.setChecked(True)
         self.btn_view_camera.setToolTip("First-person 3D simulation with live tracking symbology overlay")
@@ -193,7 +194,7 @@ class CameraFeedView(QWidget):
         self.view_toggle_group.addButton(self.btn_view_camera, 0)
         bar_layout.addWidget(self.btn_view_camera)
 
-        self.btn_view_sensor = QPushButton("SENSOR (mono)", control_bar)
+        self.btn_view_sensor = QPushButton("Sensor", control_bar)
         self.btn_view_sensor.setCheckable(True)
         self.btn_view_sensor.setToolTip("Raw monochrome detector camera frame from the tracking pipeline")
         self.btn_view_sensor.setStyleSheet(btn_style)
@@ -214,10 +215,12 @@ class CameraFeedView(QWidget):
         )
         bar_layout.addWidget(self.lbl_selected_status)
 
-        sec1_layout.addWidget(control_bar)
+        main_layout.addWidget(control_bar)
 
-        # Stacked display: CAMERA (3D) on page 0, SENSOR (mono) on page 1
-        self.view_stack = QStackedWidget(section1_widget)
+        # --------------------------------------------------------------------
+        # STACKED DISPLAY — CAMERA (3D) on page 0, SENSOR (mono) on page 1
+        # --------------------------------------------------------------------
+        self.view_stack = QStackedWidget(self)
 
         self.gimbal_3d_view = GimbalCamView(self.view_stack)
         self.view_stack.addWidget(self.gimbal_3d_view)
@@ -227,17 +230,19 @@ class CameraFeedView(QWidget):
         self.view_stack.addWidget(self._camera_view)
 
         self.view_stack.setCurrentIndex(0)
-        sec1_layout.addWidget(self.view_stack, stretch=1)
+        main_layout.addWidget(self.view_stack, stretch=1)
 
-        # Compact Technical Camera Status Bar (Task 1 §5D)
-        cam_status_bar = QFrame(section1_widget)
+        # --------------------------------------------------------------------
+        # COMPACT CAMERA STATUS BAR (Task 1 §5D)
+        # --------------------------------------------------------------------
+        cam_status_bar = QFrame(self)
         cam_status_bar.setStyleSheet(
             f"QFrame {{ background-color: {theme.BASE_BG.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 2px 4px; }}"
         )
         cs_layout = QHBoxLayout(cam_status_bar)
-        cs_layout.setContentsMargins(8, 3, 8, 3)
-        cs_layout.setSpacing(12)
+        cs_layout.setContentsMargins(8, 2, 8, 2)
+        cs_layout.setSpacing(10)
 
         badge_style = (
             f"color: {theme.TEXT_PRIMARY.name()}; font-size: 11px; font-weight: 700; font-family: Consolas;"
@@ -273,18 +278,27 @@ class CameraFeedView(QWidget):
         self.cs_state.setStyleSheet(badge_style)
         cs_layout.addWidget(self.cs_state)
 
-        sec1_layout.addWidget(cam_status_bar)
+        main_layout.addWidget(cam_status_bar)
 
-        # --------------------------------------------------------------------
-        # SECTION 2: Live Communications & Status Text Feed
-        # --------------------------------------------------------------------
-        section2_widget = QWidget(splitter)
-        sec2_layout = QVBoxLayout(section2_widget)
-        sec2_layout.setContentsMargins(2, 2, 2, 2)
-        sec2_layout.setSpacing(4)
+    # -----------------------------------------------------------------------
+    # Connection Feed Tab (separate widget for MainWindow's 4th tab)
+    # -----------------------------------------------------------------------
+    def create_connection_feed_widget(self, parent: QWidget | None = None) -> QWidget:
+        """Build and return the Connection Feed tab widget.
 
-        # Header
-        header_bar = QFrame(section2_widget)
+        The returned widget contains the LIVE COMMS & STATUS log with link/handshake
+        badges. Ownership is transferred to the caller (MainWindow adds it as a tab).
+        """
+        if self._connection_feed is not None:
+            return self._connection_feed
+
+        widget = QWidget(parent)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Header bar with link and handshake badges
+        header_bar = QFrame(widget)
         header_bar.setStyleSheet(
             f"QFrame {{ background-color: {theme.BASE_BG.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 2px; }}"
@@ -301,60 +315,66 @@ class CameraFeedView(QWidget):
         hdr_layout.addStretch(1)
 
         # Link indicator
-        self.lbl_link_indicator = QLabel("LINK CLEAR", header_bar)
-        self.lbl_link_indicator.setStyleSheet(
+        self._lbl_link_indicator = QLabel("LINK CLEAR", header_bar)
+        self.lbl_link_indicator = self._lbl_link_indicator  # compat alias
+        self._lbl_link_indicator.setStyleSheet(
             f"background-color: {theme.STATE_TRACK_BG.name()}; color: {theme.STATE_TRACK_TEXT.name()}; "
             f"border: 1px solid {theme.STATE_TRACK_PRIMARY.name()}; "
             f"border-radius: 3px; padding: 2px 6px; font-weight: 700; font-size: 10px;"
         )
-        hdr_layout.addWidget(self.lbl_link_indicator)
+        hdr_layout.addWidget(self._lbl_link_indicator)
 
         # Handshake indicator
-        self.lbl_handshake_indicator = QLabel("HANDSHAKE: OFF", header_bar)
-        self.lbl_handshake_indicator.setStyleSheet(
+        self._lbl_handshake_indicator = QLabel("HANDSHAKE: OFF", header_bar)
+        self.lbl_handshake_indicator = self._lbl_handshake_indicator  # compat alias
+        self._lbl_handshake_indicator.setStyleSheet(
             f"background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 3px; "
             f"padding: 2px 6px; font-weight: 700; font-size: 10px;"
         )
-        hdr_layout.addWidget(self.lbl_handshake_indicator)
+        hdr_layout.addWidget(self._lbl_handshake_indicator)
 
-        self.btn_clear = QPushButton("Clear", header_bar)
-        self.btn_clear.setToolTip("Clear status log history")
-        self.btn_clear.setStyleSheet(
+        btn_clear = QPushButton("Clear", header_bar)
+        btn_clear.setToolTip("Clear status log history")
+        btn_clear.setStyleSheet(
             f"QPushButton {{ background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 3px; padding: 2px 8px; "
             f"font-size: 10px; font-weight: 600; }}"
             f"QPushButton:hover {{ background-color: {theme.BTN_HOVER_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; }}"
         )
-        self.btn_clear.clicked.connect(self.clear_log)
-        hdr_layout.addWidget(self.btn_clear)
+        btn_clear.clicked.connect(self.clear_log)
+        self.btn_clear = btn_clear
+        hdr_layout.addWidget(btn_clear)
 
-        sec2_layout.addWidget(header_bar)
+        layout.addWidget(header_bar)
 
-        # Monospace Text Feed
-        self.log_text = QTextEdit(section2_widget)
-        self.log_text.setReadOnly(True)
-        self.log_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        # Monospace text feed
+        log_text = QTextEdit(widget)
+        log_text.setReadOnly(True)
+        log_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         font = QFont("Consolas", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
-        self.log_text.setFont(font)
-        self.log_text.setStyleSheet(
+        log_text.setFont(font)
+        log_text.setStyleSheet(
             f"QTextEdit {{ background-color: {theme.DARK_BG.name()}; color: {theme.TEXT_PRIMARY.name()}; "
             f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 4px; padding: 6px; "
             f"line-height: 1.4; }}"
         )
-        sec2_layout.addWidget(self.log_text, stretch=1)
+        layout.addWidget(log_text, stretch=1)
 
-        # Splitter proportions: 70% left, 30% right
-        splitter.addWidget(section1_widget)
-        splitter.addWidget(section2_widget)
-        splitter.setStretchFactor(0, 7)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([750, 320])
+        self._log_text = log_text
+        self.log_text = log_text  # compat alias
+        self._connection_feed = widget
+
+        # Replay any log entries that arrived before the widget was built
+        for entry in self._log_history:
+            self._append_log_html(entry)
 
         # Initial log message
         t_init = get_shared_clock().now()
         self.append_log(f"{t_init:.1f}s — SYSTEM READY — Dual-Direction Tracking Initialized", "info")
+
+        return widget
 
     # ------------------------------------------------------------------------
     # Public API & Proxies (for 100% test & main_window compatibility)
@@ -459,7 +479,8 @@ class CameraFeedView(QWidget):
     def clear_log(self) -> None:
         """Clear log history display."""
         self._log_history.clear()
-        self.log_text.clear()
+        if self._log_text is not None:
+            self._log_text.clear()
 
     # ------------------------------------------------------------------------
     # Control Actions
@@ -685,6 +706,12 @@ class CameraFeedView(QWidget):
     def append_log(self, text: str, tag: str = "info") -> None:
         """Append a formatted event line to the status text feed."""
         self._log_history.append(text)
+        self._append_log_html(text, tag)
+
+    def _append_log_html(self, text: str, tag: str = "info") -> None:
+        """Render a single log entry as styled HTML into the log widget."""
+        if self._log_text is None:
+            return  # Connection feed not yet created
 
         # Color mapping based on theme
         if tag == "lock":
@@ -720,8 +747,8 @@ class CameraFeedView(QWidget):
         else:
             html = f'<div style="color: {color}; margin: 2px 0;">{prefix}{text}</div>'
 
-        self.log_text.append(html)
-        self.log_text.moveCursor(QTextCursor.MoveOperation.End)
+        self._log_text.append(html)
+        self._log_text.moveCursor(QTextCursor.MoveOperation.End)
 
     def _update_selected_badge(self, state: TrackState) -> None:
         """Update the tracking state pill next to focus buttons."""
@@ -750,16 +777,18 @@ class CameraFeedView(QWidget):
 
     def _update_link_badge(self, is_clear: bool) -> None:
         """Update top link indicator badge."""
+        if self._lbl_link_indicator is None:
+            return
         if is_clear:
-            self.lbl_link_indicator.setText("LINK CLEAR")
-            self.lbl_link_indicator.setStyleSheet(
+            self._lbl_link_indicator.setText("LINK CLEAR")
+            self._lbl_link_indicator.setStyleSheet(
                 f"background-color: {theme.STATE_TRACK_BG.name()}; color: {theme.STATE_TRACK_TEXT.name()}; "
                 f"border: 1px solid {theme.STATE_TRACK_PRIMARY.name()}; "
                 f"border-radius: 3px; padding: 2px 6px; font-weight: 700; font-size: 10px;"
             )
         else:
-            self.lbl_link_indicator.setText("LINK BLOCKED")
-            self.lbl_link_indicator.setStyleSheet(
+            self._lbl_link_indicator.setText("LINK BLOCKED")
+            self._lbl_link_indicator.setStyleSheet(
                 f"background-color: {theme.STATE_LOST_BG.name()}; color: {theme.STATE_LOST_TEXT.name()}; "
                 f"border: 1px solid {theme.STATE_LOST_PRIMARY.name()}; "
                 f"border-radius: 3px; padding: 2px 6px; font-weight: 700; font-size: 10px;"
@@ -767,16 +796,18 @@ class CameraFeedView(QWidget):
 
     def _update_handshake_badge(self, is_handshake: bool) -> None:
         """Update top handshake indicator badge."""
+        if self._lbl_handshake_indicator is None:
+            return
         if is_handshake:
-            self.lbl_handshake_indicator.setText("HANDSHAKE: ACTIVE")
-            self.lbl_handshake_indicator.setStyleSheet(
+            self._lbl_handshake_indicator.setText("HANDSHAKE: ACTIVE")
+            self._lbl_handshake_indicator.setStyleSheet(
                 f"background-color: {theme.STATE_TRACK_BG.name()}; color: {theme.STATE_TRACK_TEXT.name()}; "
                 f"border: 1px solid {theme.STATE_TRACK_PRIMARY.name()}; "
                 f"border-radius: 3px; padding: 2px 6px; font-weight: 700; font-size: 10px;"
             )
         else:
-            self.lbl_handshake_indicator.setText("HANDSHAKE: OFF")
-            self.lbl_handshake_indicator.setStyleSheet(
+            self._lbl_handshake_indicator.setText("HANDSHAKE: OFF")
+            self._lbl_handshake_indicator.setStyleSheet(
                 f"background-color: {theme.ALT_BASE_BG.name()}; color: {theme.TEXT_SECONDARY.name()}; "
                 f"border: 1px solid {theme.BORDER_NORMAL.name()}; border-radius: 3px; "
                 f"padding: 2px 6px; font-weight: 700; font-size: 10px;"

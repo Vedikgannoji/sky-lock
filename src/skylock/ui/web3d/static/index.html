@@ -73,5 +73,12 @@
 
   <div id="webgl-container"></div>
 
+  <script>
+    // Safety timeout: if assets haven't loaded after 8s, force-remove the overlay
+    setTimeout(function() {
+      var ov = document.getElementById('loading-overlay');
+      if (ov) { ov.style.opacity = '0'; setTimeout(function() { ov.remove(); }, 400); }
+    }, 8000);
+  </script>
 </body>
 </html>

@@ -323,8 +323,16 @@ class GimbalCamView(QWidget):
             self.set_fov(self._last_fov_h)
             self.set_aim(self._last_forward, self._last_up, force=True)
             self.set_paused(self._is_paused)
+            # Force-remove loading overlay from Python side as safety measure
+            self._web_view.page().runJavaScript(
+                "var ov=document.getElementById('loading-overlay');"
+                "if(ov){ov.style.opacity='0';setTimeout(function(){ov.remove();},400);}"
+            )
         else:
             logger.warning("GimbalCamView failed to load WebGL scene")
+            # Still mark ready so the app doesn't hang
+            self._is_ready = True
+            self.scene_ready.emit()
 
     def resizeEvent(self, event: Any) -> None:  # noqa: ANN401
         """Keep tracking overlay exactly covering the letterboxed 4:3 render rect."""
